@@ -1,0 +1,20 @@
+{
+"agent_version": "1.0.0",
+"project_type": "backend-focused",
+"permissions": {
+"allow_terminal_commands": true,
+"allow_file_modifications": true,
+"restricted_paths": [
+".env",
+".pem",
+"config/secure/"
+]
+},
+"exclude_from_context": [
+"node_modules/",
+"target/",
+".git/",
+"logs/",
+".mp4"
+]
+}
