@@ -1,0 +1,64 @@
+# 销售 Copilot 工作流 (Sales Copilot Chatbot)
+# 导入方式：Dify -> 创建应用 -> 导入 DSL
+
+app:
+  name: 销售话术 Copilot
+  mode: chatbot
+  icon: 💼
+
+description: |
+  挂载 Sales_KB 知识库，根据销售输入的客户痛点或聊天记录，生成破冰、异议处理、逼单三类话术。
+
+environment_variables:
+  - name: BACKEND_BASE_URL
+    value: http://host.docker.internal:8000
+    type: string
+
+workflow:
+  - node_id: start
+    type: start
+    outputs:
+      - name: pain_point
+        type: string
+        description: 客户痛点 / 聊天记录
+
+  - node_id: knowledge_retrieval
+    type: knowledge_retrieval
+    dataset: Sales_KB
+    retrieval_mode: semantic
+    top_k: 3
+    score_threshold: 0.0
+    query: "{{#start.pain_point#}}"
+
+  - node_id: script_generator
+    type: llm
+    model: DeepSeek-V3
+    system: |
+      你是「肠道健康」品牌的销售话术教练。你只能根据提供的参考案例生成话术，禁止虚构疗效。
+      话术必须遵守：
+      - 不宣称产品能“治疗/治愈/替代药物”。
+      - 涉及肠道指标解读时，使用“提示/参考/建议进一步咨询”等弱断言。
+      - 推荐跟进话术中必须包含“具体方案建议咨询医生/营养师”的兜底。
+    prompt: |
+      客户痛点 / 聊天记录：
+      {{#start.pain_point#}}
+
+      参考案例：
+      {{#knowledge_retrieval.result#}}
+
+      请按以下结构输出 3 条话术（每条控制在 100 字以内）：
+      1. 【破冰话术】建立信任、缓解防备
+      2. 【异议处理话术】回应客户抗拒点
+      3. 【逼单/跟进话术】推动下一步行动
+
+      如果参考案例为空或无法提供有效话术，请直接说明“暂无匹配案例，建议人工判断”。
+
+  - node_id: end
+    type: end
+    answer: "{{#script_generator.output#}}"
+
+recommended_model:
+  provider: DeepSeek
+  model: DeepSeek-V3
+  temperature: 0.5
+  max_tokens: 1200

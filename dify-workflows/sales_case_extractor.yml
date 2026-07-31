@@ -1,0 +1,84 @@
+# 销售案例提炼工作流 (Sales Case Extractor)
+# 导入方式：Dify -> 创建应用 -> 导入 DSL
+# 使用方式：销售粘贴成交聊天记录 -> 本 Workflow 提炼结构化案例 -> HTTP 提交到后端
+
+app:
+  name: 销售案例提炼器
+  mode: workflow
+  icon: 📝
+
+description: |
+  输入成交聊天记录，按统一模板提炼为结构化销售案例，并自动提交到后端 /api/v1/knowledge/sales-case。
+
+environment_variables:
+  - name: BACKEND_BASE_URL
+    value: http://host.docker.internal:8000
+    type: string
+
+workflow:
+  - node_id: start
+    type: start
+    outputs:
+      - name: raw_chat_log
+        type: string
+      - name: submitted_by
+        type: string
+        description: 销售企微 UserId
+
+  - node_id: extractor
+    type: llm
+    model: DeepSeek-V3
+    system: |
+      你是一位销售案例分析师。请从成交聊天记录中提炼出标准化销售案例，不得虚构任何内容。
+    prompt: |
+      请阅读以下成交聊天记录，并严格按 JSON 输出：
+
+      {{#start.raw_chat_log#}}
+
+      输出格式要求：
+      {
+        "customer_type": "客户类型（如：企业高管、宝妈、慢性便秘患者）",
+        "core_objection": "核心抗拒点（1-2句话）",
+        "breakthrough_logic": "成交破阻逻辑（销售如何说服客户）",
+        "follow_up_script": "推荐跟进话术（可直接复用）"
+      }
+
+      只输出 JSON，不要其他解释。
+
+  - node_id: parse_json
+    type: code
+    code: |
+      // 将 extractor 的 JSON 文本解析为对象
+      const output = JSON.parse({{#extractor.output#}});
+      return output;
+
+  - node_id: submit_case
+    type: http_request
+    method: POST
+    url: "{{#env.BACKEND_BASE_URL#}}/api/v1/knowledge/sales-case"
+    headers:
+      Content-Type: application/json
+    body:
+      submitted_by: "{{#start.submitted_by#}}"
+      raw_chat_log: "{{#start.raw_chat_log#}}"
+      customer_type: "{{#parse_json.customer_type#}}"
+      core_objection: "{{#parse_json.core_objection#}}"
+      breakthrough_logic: "{{#parse_json.breakthrough_logic#}}"
+      follow_up_script: "{{#parse_json.follow_up_script#}}"
+      extracted_summary:
+        customer_type: "{{#parse_json.customer_type#}}"
+        core_objection: "{{#parse_json.core_objection#}}"
+        breakthrough_logic: "{{#parse_json.breakthrough_logic#}}"
+        follow_up_script: "{{#parse_json.follow_up_script#}}"
+
+  - node_id: end
+    type: end
+    answer: |
+      案例已提交，等待运营审核。提炼结果：
+      {{#parse_json#}}
+
+recommended_model:
+  provider: DeepSeek
+  model: DeepSeek-V3
+  temperature: 0.2
+  max_tokens: 1024

@@ -1,0 +1,156 @@
+# 客服 Agent 工作流 (CS Agent Chatbot)
+# 导入方式：Dify -> 创建应用 -> 导入 DSL（如需实际导入请根据 Dify 当前版本导出空模板后替换本文件字段）
+
+app:
+  name: 肠道健康客服助手
+  mode: chatbot
+  icon: 🤖
+
+description: |
+  挂载 CS_KB 知识库，回答肠菌检测/调养客服问题。
+  当检索匹配分 < 0.65 或命中高风险关键词时，触发转人工并回调后端捕获未解答问题。
+
+environment_variables:
+  - name: BACKEND_BASE_URL
+    value: http://host.docker.internal:8000
+    type: string
+
+workflow:
+  # ========== 1. 开始节点 ==========
+  - node_id: start
+    type: start
+    outputs:
+      - name: query
+        type: string
+        description: 用户输入
+
+  # ========== 2. 高风险关键词检查（可选前置护栏） ==========
+  - node_id: risk_guard
+    type: llm
+    model: DeepSeek-V3
+    system: |
+      你是一台安全分类器。判断用户输入是否包含任何高风险医疗描述或症状。
+      高风险清单：便血、黑便、鲜血便、剧烈腹痛、持续腹痛、绞痛、持续腹泻、水样便、脓血便、
+      体重骤降、不明原因消瘦、肠梗阻、肠穿孔、肠癌、直肠癌、结肠癌、高烧不退、严重脱水。
+      仅回答 true 或 false，不要解释。
+    prompt: "用户输入：{{#start.query#}}"
+    outputs:
+      - name: risk_flag
+        type: string
+
+  # ========== 3. 条件分支：高风险直接转人工 ==========
+  - node_id: risk_branch
+    type: condition
+    conditions:
+      - if: "{{#risk_guard.risk_flag#}} == 'true'"
+        to: risk_handoff
+      - else:
+        to: knowledge_retrieval
+
+  # ========== 3a. 高风险转人工话术 + 回调 ==========
+  - node_id: risk_handoff
+    type: template
+    template: |
+      您描述的情况可能涉及健康风险，我这边无法在线判断。建议您尽快联系专业医生或拨打客服热线。
+      我马上为您转接专属健康顾问。
+
+  - node_id: risk_callback
+    type: http_request
+    method: POST
+    url: "{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture"
+    headers:
+      Content-Type: application/json
+    body:
+      user_query: "{{#start.query#}}"
+      risk_flag: true
+      context:
+        channel: dify_cs_agent
+
+  # ========== 4. 知识检索 CS_KB ==========
+  - node_id: knowledge_retrieval
+    type: knowledge_retrieval
+    dataset: CS_KB
+    retrieval_mode: semantic
+    top_k: 3
+    score_threshold: 0.65
+    query: "{{#start.query#}}"
+    outputs:
+      - name: result
+        type: array
+
+  # ========== 5. 置信度分支 ==========
+  - node_id: score_branch
+    type: condition
+    conditions:
+      - if: "{{#knowledge_retrieval.result#}}.length > 0"
+        to: answer_llm
+      - else:
+        to: fallback_handoff
+
+  # ========== 6. 正常回答 LLM ==========
+  - node_id: answer_llm
+    type: llm
+    model: DeepSeek-V3
+    system: |
+      {{#system_prompt#}}
+    prompt: |
+      用户问题：{{#start.query#}}
+
+      检索到的参考内容：
+      {{#knowledge_retrieval.result#}}
+
+      请基于参考内容生成回答，不要添加未在知识库中出现的信息。
+      如果参考内容无法回答，请输出“我无法确定”并建议转人工。
+
+  # ========== 7. 低置信度兜底：回调 + 话术 ==========
+  - node_id: fallback_handoff
+    type: template
+    template: |
+      抱歉，您的问题比较复杂，我暂时无法准确回答。已为您记录，专属健康顾问会尽快联系您，请稍候。
+
+  - node_id: fallback_callback
+    type: http_request
+    method: POST
+    url: "{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture"
+    headers:
+      Content-Type: application/json
+    body:
+      user_query: "{{#start.query#}}"
+      match_score: 0.0
+      risk_flag: false
+      context:
+        channel: dify_cs_agent
+        score: "low"
+
+  # ========== 8. 结束节点 ==========
+  - node_id: end
+    type: end
+    answer: |
+      {% if branch == 'risk' %}
+      {{#risk_handoff.output#}}
+      {% elif branch == 'answer' %}
+      {{#answer_llm.output#}}
+      {% else %}
+      {{#fallback_handoff.output#}}
+      {% endif %}
+
+system_prompt: |
+  你是「肠道健康」品牌的智能客服助手，只能回答：
+  1) 肠菌检测流程与报告解读（非诊断）；
+  2) 肠道健康科普知识；
+  3) 公司产品和调养服务说明；
+  4) 订单、物流、退款政策。
+
+  严格遵循以下规则：
+  - 不做出任何疾病诊断，不推荐使用药品或具体剂量。
+  - 遇到便血、剧烈腹痛、持续腹泻、体重骤降、高烧等高风险描述时，必须立刻输出转人工话术，不再继续回答问题。
+  - 报告中的检测指标仅做“科普性解释”，结尾必须建议用户咨询医生或营养师。
+  - 产品功效只引用已审核知识库内的标准话术，不得自行发挥。
+  - 若用户问题超出知识库范围或你不确定，请礼貌告知无法回答并引导转人工。
+  - 所有医疗相关内容末尾追加：以上信息仅供参考，不能替代专业医疗建议。如有不适，请及时就医。
+
+recommended_model:
+  provider: DeepSeek
+  model: DeepSeek-V3
+  temperature: 0.3
+  max_tokens: 1024
