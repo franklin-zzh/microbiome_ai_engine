@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import struct
 from typing import Optional
 
@@ -18,46 +19,44 @@ class WXBizMsgCrypt:
         self.iv = self.key[:16]
 
     def verify_signature(self, signature: str, timestamp: str, nonce: str, echostr_or_msg: str) -> bool:
+        if not signature:
+            return False
         items = sorted([self.token, timestamp, nonce, echostr_or_msg])
-        sha1 = hashlib.sha1()
-        sha1.update("".join(items).encode("utf-8"))
-        digest = sha1.hexdigest()
-        return digest == signature
+        digest = hashlib.sha1("".join(items).encode("utf-8")).hexdigest()
+        # 常量时间比较，避免时序侧信道泄露
+        return hmac.compare_digest(digest, signature)
+
+    def _decrypt(self, encrypted_text: str) -> bytes:
+        """AES-CBC 解密 + PKCS#7 去填充，返回原始明文 bytes"""
+        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        encrypted_bytes = base64.b64decode(encrypted_text)
+        decrypted_bytes = decryptor.update(encrypted_bytes) + decryptor.finalize()
+
+        # PKCS#7 unpad
+        pad_len = decrypted_bytes[-1]
+        if 1 <= pad_len <= 32:
+            decrypted_bytes = decrypted_bytes[:-pad_len]
+        return decrypted_bytes
+
+    def _extract_msg(self, decrypted_bytes: bytes) -> str:
+        """解析明文：16 字节随机 + 4 字节 msg_len + msg + receive_id，并校验 receive_id"""
+        content_len = struct.unpack(">I", decrypted_bytes[16:20])[0]
+        msg = decrypted_bytes[20 : 20 + content_len].decode("utf-8")
+        # 尾部 receive_id（企微为 corp_id）校验；未配置 receive_id 时跳过以保持向后兼容
+        actual_receive_id = decrypted_bytes[20 + content_len :].decode("utf-8", errors="ignore")
+        if self.receive_id and actual_receive_id != self.receive_id:
+            raise ValueError(
+                f"receive_id mismatch: expected {self.receive_id!r}, got {actual_receive_id!r}"
+            )
+        return msg
 
     def decrypt_echo_str(self, signature: str, timestamp: str, nonce: str, echostr: str) -> str:
         if not self.verify_signature(signature, timestamp, nonce, echostr):
             raise ValueError("Invalid signature for WeChat Callback verification")
-
-        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
-        decryptor = cipher.decryptor()
-        encrypted_bytes = base64.b64decode(echostr)
-        decrypted_bytes = decryptor.update(encrypted_bytes) + decryptor.finalize()
-
-        # PKCS#7 unpad
-        pad_len = decrypted_bytes[-1]
-        if 1 <= pad_len <= 32:
-            decrypted_bytes = decrypted_bytes[:-pad_len]
-
-        # Extract content: 16-byte random + 4-byte msg_len + msg + receive_id
-        content_len = struct.unpack(">I", decrypted_bytes[16:20])[0]
-        msg = decrypted_bytes[20 : 20 + content_len].decode("utf-8")
-        return msg
+        return self._extract_msg(self._decrypt(echostr))
 
     def decrypt_msg(self, signature: str, timestamp: str, nonce: str, encrypted_msg: str) -> str:
         if not self.verify_signature(signature, timestamp, nonce, encrypted_msg):
             raise ValueError("Invalid signature for encrypted message")
-
-        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
-        decryptor = cipher.decryptor()
-        encrypted_bytes = base64.b64decode(encrypted_msg)
-        decrypted_bytes = decryptor.update(encrypted_bytes) + decryptor.finalize()
-
-        # PKCS#7 unpad
-        pad_len = decrypted_bytes[-1]
-        if 1 <= pad_len <= 32:
-            decrypted_bytes = decrypted_bytes[:-pad_len]
-
-        # Extract content: 16-byte random + 4-byte msg_len + msg + receive_id
-        content_len = struct.unpack(">I", decrypted_bytes[16:20])[0]
-        msg = decrypted_bytes[20 : 20 + content_len].decode("utf-8")
-        return msg
+        return self._extract_msg(self._decrypt(encrypted_msg))

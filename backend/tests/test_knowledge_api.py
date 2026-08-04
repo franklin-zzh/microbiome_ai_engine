@@ -26,6 +26,12 @@ def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
+# 后台任务（如审核通过后的 Dify 同步）自建 session 时也需指向测试库：
+# services.sync_approved_knowledge 在 db=None 时使用模块级 CoreSessionLocal（生产库），
+# 测试中将其替换为 TestingSessionLocal，否则后台任务查不到测试库里的 item
+import app.knowledge.services as knowledge_services
+
+knowledge_services.CoreSessionLocal = TestingSessionLocal
 client = TestClient(app)
 
 

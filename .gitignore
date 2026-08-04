@@ -18,5 +18,7 @@ venv/
 node_modules/
 .DS_Store
 *.log
+*.pid
+.reasonix/
 .vscode/
 .idea/

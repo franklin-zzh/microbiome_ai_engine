@@ -31,7 +31,8 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        # 注意：allow_origins=["*"] 时不能开启 allow_credentials（浏览器拒绝该组合）
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

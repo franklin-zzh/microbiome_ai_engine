@@ -156,7 +156,9 @@ def approve_knowledge(
         extra={"approved_by": body.approved_by},
     )
 
-    background_tasks.add_task(sync_approved_knowledge, item.id, db)
+    # 不传请求级 db：后台线程跨请求使用同一 Session 非线程安全，
+    # services 层在 db=None 时自建独立 session（见 sync_approved_knowledge）
+    background_tasks.add_task(sync_approved_knowledge, item.id)
     return GenericMessageResponse(message="Approved and sync scheduled")
 
 

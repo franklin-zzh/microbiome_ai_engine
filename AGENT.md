@@ -74,7 +74,7 @@ H5 官网聊天窗  ─┘        │                                           
 ## 4. 控制中心映射 (.agent/ Folder Mapping)
 
 ```
-gut-health-agent-platform/        # 项目根目录（物理目录保留；项目名 agent_cs）
+D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-health-agent-platform/ 迁移至此；项目名 agent_cs）
 ├── AGENT.md                      # 本文件（AI 核心索引与全局大纲）
 ├── docker-compose.yml            # 网关栈：FastAPI backend（MySQL/Redis 复用宿主容器）
 ├── docker-compose.dify.yml       # Dify 私有化部署（官方镜像 1.16.1，本地开发集）
@@ -150,9 +150,9 @@ gut-health-agent-platform/        # 项目根目录（物理目录保留；项�
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-03 17:40
+- **最近一次同步时间**：2026-08-04 01:50
 
-- **当前关注的架构焦点**：后端代码目录已从"按技术层切分"（api/models/schemas/services）重构为"按业务域切分"（app/{core,clients,knowledge,agent_cs,agent_sales,agent_doctor}），与 MySQL 双库边界（mb_ai_core 知识库体系 / mb_ai_cs 客服会话体系）对齐：knowledge 域（横切共享三表 + 审核→Dify 同步）、agent_cs 域（对话日志湖 / 会话状态机 / 微信回调）、agent_sales 域（leads_preview + extractor Phase 2 占位）、agent_doctor 域（Phase 3 占位）；Dify 调用抽出为 clients/dify_client.py。所有 URL 前缀（/knowledge /admin /cs /chat /wechat /wx）保持不变，pytest 9/9 通过。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理。
+- **当前关注的架构焦点**：业务域重构已提交并迁移至根目录；Review 4 项低风险修复已落地——① knowledge/router.py 后台任务不再传请求级 db（services 自建 session，线程安全）② wxbizmsgcrypt.py 签名比对改 hmac.compare_digest + 解密后校验 receive_id（未配置时向后兼容）③ main.py CORS 去掉 allow_credentials（与 allow_origins=["*"] 非法组合）④ uvicorn.pid / .reasonix 移出 git 并加入 .gitignore。pytest 待复验。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），MySQL 双库化。
@@ -161,3 +161,6 @@ gut-health-agent-platform/        # 项目根目录（物理目录保留；项�
     - [x] 4. docker-compose.yml 复用宿主 MySQL8/Redis；docker-compose.dify.yml（官方镜像 1.16.1，端口 5434/6381）。
     - [ ] 5. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
     - [ ] 6. 第 3 周：企微微信客服消息解密 + 主动推送、Celery 异步队列、frp 内网穿透联调。
+    - [ ] 7. 微信 POST 回调补齐验签/解密/主动推送（当前是计划内空壳，W3 落地）。
+    - [ ] 8. 接通负面情绪计数：`increment_negative_streak` 当前是死代码，"连续负面≥2 转人工"规则未接线（AGENT.md §3.2-3 有定义）。
+    - [ ] 9. 全接口鉴权（医疗产品建议加 token，新功能，需产品决策）。
