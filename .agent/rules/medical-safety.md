@@ -1,6 +1,6 @@
 # 医疗合规与安全护栏规则 (.agent/rules/medical-safety.md)
 
-> 适用范围：gut-health-agent-platform 中所有面向 C 端用户的客服 Agent 与销售话术生成。  
+> 适用范围：agent_cs 中所有面向 C 端用户的客服 Agent 与销售话术生成。  
 > 原则：AI 只能提供健康科普、产品服务说明与就医建议，**严禁替代医生做出诊断或开具/推荐具体用药**。
 
 ## 1. 红线定义

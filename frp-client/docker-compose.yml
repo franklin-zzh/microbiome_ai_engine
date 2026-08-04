@@ -1,0 +1,9 @@
+services:
+  frpc:
+    image: snowdreamtech/frpc:latest
+    container_name: frpc
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # 关键：让容器能够访问到本地电脑宿主机的 8000 端口
+    volumes:
+      - ./frpc.toml:/etc/frp/frpc.toml

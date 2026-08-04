@@ -1,4 +1,4 @@
-# 产品需求文档 · gut-health-agent-platform
+# 产品需求文档 · agent_cs（原 gut-health-agent-platform）
 
 # 肠道微生态 AI 智脑引擎 MVP 方案设计
 
@@ -87,7 +87,7 @@ Plaintext
 
 ## 三、 亟需与运营、业务方确认的 5 大核心细节
 
-技术架构落地方案已定型，但在医疗健康（肠道微生态）场景中，上线前必须与业务负责人（如张总、医疗合规专家）明确以下边界：
+技术架构落地方案已定型，但在医疗健康（肠道微生态）场景中，上线前必须与业务负责人（医疗合规专家）明确以下边界：
 
 |**确认事项**|**潜在影响 / 风险**|**产品经理建议方案**|
 |---|---|---|
@@ -107,3 +107,18 @@ Plaintext
 | **Day 3-5**<br><br>  <br>  <br><br>后端 API、Dify Sync 与客服闭环    | 3个工作日  | 1. 开发 FastAPI 审核通过 Hook API，集成 Dify Document Sync SDK。<br><br>  <br><br>2. 搭建 CS Workflow，实现低分置信度回调 `/api/v1/cs/unanswered/capture` 异步入库。<br><br>  <br><br>3. 联调客服端 API。 |
 | **Day 6-7**<br><br>  <br>  <br><br>销售 Copilot 侧边栏 & Admin 后台 | 2个工作日  | 1. 完成极简 Web 管理后台（知识列表、审核按钮、缺口列表、案例列表）。<br><br>  <br><br>2. 完成销售侧边栏 H5 开发，集成“话术推荐”与“一键提取案例提交”功能。                                                                          |
 | **Day 8-9**<br><br>  <br>  <br><br>三大路径联合调试与 Demo 上线         | 2个工作日  | 1. 跑通完整 3 大黄金闭环（问答捕获 $\rightarrow$ 审核同步 $\rightarrow$ 再次提问命中 $\rightarrow$ 销售案例沉淀）。<br><br>  <br><br>2. 沙箱环境演练，向业务团队演示并交付 Demo。                                          |
+
+---
+
+# 附：微信 AI 客服演进方案（v2，当前主线）
+
+> **2026-08-03 更新**：产品方向演进为「微信 AI 客服平台」（微信客服/公众号/H5/企微群 + Dify + 5 秒异步网关 + 对话日志湖）。
+> 本 PRD 的知识审核闭环（approve → Sync → Dify）、低分捕获、医疗安全规则 **继续复用**，为 v2 的子能力。
+> 完整 v2 方案与 6 周计划见 `.agent/designs/wechat-ai-cs-v2.md`，评审意见见 `.agent/design-review.md`。
+
+### v2 相对 v1 的新增能力
+1. 四大微信入口（企微微信客服单聊、公众号/服务号、H5、企微群机器人），统一走 FastAPI 网关。
+2. Redis 会话状态机（`NORMAL / HUMAN_MODE / BLOCKED`）+ 5 秒异步回包（第 3 周 Celery 队列）。
+3. 三张新表：`chat_logs`（全量对话日志湖）、`session_state`（会话状态）、`leads_preview`（线索预备）。
+4. 知识库四库结构：Standard FAQ / Product / Procedure / Marketing（双轨 RAG：FAQ 高阈值 + Product 混合检索）。
+5. 满意度收集、用户画像、高频 Q&A 总结、企微线索通知。

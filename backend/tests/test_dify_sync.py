@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import httpx
 
-from app.services.dify_sync import DifySyncError, sync_knowledge_to_dify
+from app.clients.dify_client import DifySyncError, sync_knowledge_to_dify
 
 
 def test_sync_creates_document_when_no_vector_doc_id():

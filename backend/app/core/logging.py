@@ -10,7 +10,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-logger = logging.getLogger("gut-health")
+logger = logging.getLogger("agent_cs")
 
 
 def structured_log(

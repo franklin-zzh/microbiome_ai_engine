@@ -1,22 +1,12 @@
-version: "3.9"
+# ============================================================
+# agent_cs 网关栈：FastAPI backend
+# 数据库/缓存复用本地 Docker 部署的既有容器（不在本 compose 重复创建）：
+#   - MySQL 8   global-mysql8  @3306  (root/fumate)
+#   - Redis     redis          @6380  (密码 fumate，本项目独占 db3)
+# Dify 私有化部署见 docker-compose.dify.yml（官方镜像 1.16.1）
+# ============================================================
 
 services:
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: gut_health
-    ports:
-      - "5432:5432"
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d gut_health"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   backend:
     build:
       context: ./backend
@@ -24,17 +14,18 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/gut_health
+      # 容器内访问宿主机 MySQL/Redis 使用 host.docker.internal
+      - CORE_DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:-fumate}@host.docker.internal:3306/mb_ai_core?charset=utf8mb4
+      - CS_DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:-fumate}@host.docker.internal:3306/mb_ai_cs?charset=utf8mb4
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-fumate}@host.docker.internal:6380/3
       - DIFY_BASE_URL=${DIFY_BASE_URL}
       - DIFY_API_KEY=${DIFY_API_KEY}
       - CS_DATASET_ID=${CS_DATASET_ID}
       - SALES_DATASET_ID=${SALES_DATASET_ID}
-    depends_on:
-      db:
-        condition: service_healthy
+      - APP_NAME=agent_cs
+      - DEBUG=${DEBUG:-true}
     volumes:
       - ./backend:/app
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-volumes:
-  pg_data:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

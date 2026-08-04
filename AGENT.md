@@ -3,167 +3,161 @@
 
 ## 1. 项目基本盘 (Project Context)
 
-- **项目名称**：`gut-health-agent-platform` / `肠道健康 Agent 平台`
-    
-- **定位与目标**：基于 MVP 理念，为（肠菌检测+调养）公司搭建一套“1个统一知识底座 + 3类角色 Agent（客服、销售 Copilot、医师 CDSS）”的轻量级 AI 矩阵平台。打通数据自进化闭环（数据捕获 $\rightarrow$ 审核入库 $\rightarrow$ 向量同步 $\rightarrow$ 智商升级），解耦底层大模型绑定风险。
-    
-- **当前开发阶段**：Step 1 MVP 极速落地阶段（核心数据底座搭建、FastAPI 后端、Dify 向量库同步与审核闭环）。
-    
+- **项目名称**：`agent_cs`（AI 客服 Agent；共享知识库引擎命名为 `engine_rag`，未来可拆分为独立服务）
+
+- **定位与目标**：面向（肠菌检测+调养）公司搭建 **微信生态 AI 客服系统（AICS）**：
+    - 7×24 小时客户 FAQ 自动回答，覆盖 微信客服（单聊）、公众号/服务号、H5、企微群机器人 四大入口；
+    - 自动推荐相关资料（视频、文章、产品信息）；
+    - 将企业已有产品知识、服务流程、FAQ 转化为可查询知识库（`engine_rag`）；
+    - 收集客户满意度；基于对话数据沉淀用户画像、高频 Q&A，辅助销售决策。
+
+- **总体工期**：6 周（详见 §4.5 里程碑与 `.agent/designs/wechat-ai-cs-v2.md`）。
+
+- **当前开发阶段**：**第 1 周：基础架构与数据库设计**（docker-compose 环境初始化、MySQL 双库建表、FastAPI + Redis 状态机框架）。
 
 ## 2. 技术栈与运行环境 (Tech Stack & Environment)
 
 当你编写、重构或调试代码时，必须严格遵守以下技术规范：
 
-- **最新业务确认 (2026-07-29)**：
-    
-    - **核心语言/框架**：Python 3.11+ (FastAPI) 轻量级服务 + Pydantic v2
-        
-    - **Agent & RAG 引擎**：Dify (私有化 Docker 部署 / SaaS API) + 混合模型（DeepSeek-V3/R1、Qwen-Max/Turbo）
-        
-    - **数据存储**：PostgreSQL 15+（核心业务与状态控制） + Dify Vector DB (PGVector / Qdrant)
-        
-    - **前端架构**：Vue 3 + Tailwind CSS（Admin 审核后台） / H5 (企业微信侧边栏 & 客服 Chat 挂载)
-        
-    - **环境限制**：Windows 11 + Docker Desktop (WSL2) 开发环境，部署目标为 Linux Docker 容器
-        
-- **核心依据**：所有业务细节严格对齐 `.agent/prd.md` 与 `.agent/prompts/requirement_doc.txt`。
-    
+- **核心语言/框架**：Python 3.11+ (FastAPI) + Pydantic v2 + SQLAlchemy 2.x
+- **Agent & RAG 引擎**：Dify (Docker 私有化部署，当前官方版本 `1.16.1`) + Embedding/LLM 自配 API Key
+- **缓存与队列**：Redis（本地 Docker `redis` 容器，`6380` 端口，密码 `fumate`，**本项目独占 db3**；会话状态机、5 秒异步回包上下文缓存；Celery 队列于第 3 周引入）
+- **数据存储**：**MySQL 8 双库**（本地 Docker `global-mysql8` 容器，`3306` 端口，root/fumate）：
+    - `mb_ai_core`：公共用户 / 知识库索引（knowledge_items / unanswered_questions / sales_cases）
+    - `mb_ai_cs`：客服 Agent 专有库（cs_chat_logs / session_state / leads_preview）
+    - 向量库直接使用 Dify 内置 **Weaviate**（非 pgvector），不单独维护 Milvus
+- **微信生态**：企业微信「微信客服」API（加解密 + 消息收发）、公众号/服务号被动回复与客服消息、企微群机器人 Webhook
+- **环境限制**：Windows 11 + Docker Desktop (WSL2) 开发环境，部署目标为 Linux Docker 容器
+
+> **存储选型说明（2026-08-03 定稿修订）**：业务方要求沿用 MySQL（向量库由 Dify/单独承担，而非 PostgreSQL）。
+> 业务数据 100% 走 MySQL 8 双库；Dify 官方架构自带的 `db_postgres` 仅作为 Dify 元数据库（宿主端口 5434），不承担任何业务/向量职责。
+> 表 `chat_logs` 已更名为 `cs_chat_logs`（客服会话表统一 `cs_` 前缀）。
 
 ## 3. 架构设计与核心规则 (Architecture & Rules)
 
-为了保持代码库的整洁和高维护性，所有自适应修改必须符合以下规则：
+### 3.1 总体架构
+
+```
+微信客服(单聊) ─┐
+公众号/服务号   ├─> FastAPI 网关 ──> Redis db3(状态机/异步缓存) ──> Celery(第3周) ──> Dify Workflow
+H5 官网聊天窗  ─┘        │                                           │
+企微群机器人 ────────────┘                                           ▼
+                        │                                   意图分类 → FAQ KB(高阈值) → Product/Procedure/Marketing KB
+                        ▼
+                 MySQL 8 双库：mb_ai_core(知识库索引) + mb_ai_cs(cs_chat_logs/session_state/leads_preview)
+```
+
+### 3.2 核心规则
 
 1. **数据源头单一与解耦原则**：
-    
-    - PostgreSQL 为系统的 **Single Source of Truth（单一事实来源）**。
-        
-    - 所有知识项、未解答问题、销售案例均在关系型数据库中控制生命周期（`DRAFT` $\rightarrow$ `PENDING` $\rightarrow$ `APPROVED` $\rightarrow$ `REJECTED`）。严禁不经过数据库审核直接写入 Dify 向量库。
-        
-2. **安全护栏与人机协同 (Human-in-the-Loop)**：
-    
-    - **医疗合规红线**：客服 Agent 严禁给出确诊或用药诊断，遭遇高风险关键词（如便血、剧烈腹痛）强行触发安全护栏并转接企微销售。
-        
-    - **低置信度捕获**：客服检索匹配得分 $< 0.65$ 时，自动异步写入 `unanswered_questions` 表。
-        
-3. **密钥与凭证安全**：
-    
-    - 绝对不允许在代码或 Dify DSL 中硬编码任何 API Key、Database Password、Dify Dataset Tokens。
-        
-    - 必须通过 `.env` 环境变量统一管理并在运行时加载。
-        
-4. **轻量与高扩展设计**：
-    
-    - 遵循 MVP 最小可行性原则，避免过度设计。接口设计遵循 RESTful 规范，核心业务逻辑在 Service 层消化，异步同步任务使用 FastAPI `BackgroundTasks` 执行。
-        
-5. **结构化日志与可观测性**：
-    
-    - 核心业务节点（如：未解答问题捕获、知识审核 Hook、Dify API 向量同步失败）必须输出结构化 JSON 日志（包含 `item_id`, `domain`, `source_type`, `status`, `error_msg`）。
-        
+    - MySQL 为系统的 **Single Source of Truth**（双库：`mb_ai_core` 知识库体系 / `mb_ai_cs` 客服会话体系，跨库无外键依赖，业务层通过双引擎 `core_engine` + `cs_engine` 分别访问）。
+    - 知识项在关系库中控制生命周期（`DRAFT → PENDING → APPROVED → REJECTED`），严禁绕过数据库审核直接写入 Dify 向量库。
+    - `cs_chat_logs` 沉淀全量对话日志（含 RAG 召回切片与得分），是后续用户画像与知识反哺的唯一数据湖。
+
+2. **5 秒异步回包（微信硬约束）**：
+    - 微信/企微回调必须在 5 秒内返回 `success`；所有 AI 生成逻辑必须异步化（Redis 缓存上下文 → Celery 队列 → Dify 调用 → 主动推送回复）。
+    - 回调接口内**严禁**同步调用 Dify。
+
+3. **安全护栏与人机协同 (HITL)**：
+    - 医疗合规红线：客服 Agent 严禁确诊或给用药建议；高风险关键词（便血、剧烈腹痛等）强制转人工。
+    - 会话状态机：`NORMAL / HUMAN_MODE / BLOCKED`（Redis db3 存储，TTL 管理）；用户输入"转人工"或连续负面情绪 → 置 `HUMAN_MODE`，AI 停止抢答。
+    - 低置信度捕获：检索匹配分 < 0.65 时异步写入 `unanswered_questions` / 知识待补充清单。
+
+4. **密钥与凭证安全**：
+    - 禁止在代码 / Dockerfile / Dify DSL 中硬编码任何 API Key、DB 密码、EncodingAESKey、Dataset Token。
+    - 统一走 `.env`（根目录 + backend/），运行时经 `pydantic-settings` 加载；`restricted_paths` 保护 `.env` / `.pem`。
+
+5. **轻量与高扩展设计**：遵循 MVP 最小可行原则，避免过度设计（例如不引入 Milvus 集群、第一周不引入 Celery）。接口 RESTful，核心业务逻辑在 Service 层消化。
+
+6. **结构化日志与可观测性**：核心业务节点输出结构化 JSON 日志（含 `item_id`, `domain`, `source_type`, `status`, `error_msg`），logger 名 `agent_cs`，见 `app/core/logging.py`。
 
 ## 4. 控制中心映射 (.agent/ Folder Mapping)
 
-本项目在隐藏目录 `.agent/` 下设立了模块化的指令中心，请按需加载：
-
-Plaintext
-
 ```
-microbiome-ai-engine/             # 项目根目录
+gut-health-agent-platform/        # 项目根目录（物理目录保留；项目名 agent_cs）
 ├── AGENT.md                      # 本文件（AI 核心索引与全局大纲）
-├── .env.example                  # 环境变量配置模版
-├── backend/                      # FastAPI 服务、Core DB 交互、Dify 同步引擎
+├── docker-compose.yml            # 网关栈：FastAPI backend（MySQL/Redis 复用宿主容器）
+├── docker-compose.dify.yml       # Dify 私有化部署（官方镜像 1.16.1，本地开发集）
+├── backend/                      # FastAPI 网关服务
 │   ├── app/
-│   │   ├── api/                  # REST API 路由 (cs, sales, admin, knowledge)
-│   │   ├── models/               # PostgreSQL ORM 实体模型
-│   │   ├── services/             # 业务逻辑与 Dify Sync 引擎
-│   │   └── core/                 # 数据库连接与安全配置
-│   └── main.py                   # FastAPI 应用入口
-├── admin-web/                    # 极简 Web 审核后台 (Vue 3 / React)
-├── sales-copilot-sidebar/        # 企微侧边栏 H5 前端
-├── dify-workflows/               # Dify 导出的 Workflow/Agent DSL (YAML) 配置文件
+│   │   ├── core/                 # 公共基础设施：config / database(双引擎) / redis / wxbizmsgcrypt / logging
+│   │   ├── clients/              # 外部服务 Client（dify_client.py：Dify SDK 统一封装）
+│   │   ├── knowledge/            # 知识库域（横切共享，mb_ai_core）：models / schemas / services / router
+│   │   ├── agent_cs/             # 客服 Agent 域（mb_ai_cs）：models / schemas / services(状态机) / router(含微信回调)
+│   │   ├── agent_sales/          # 销售 Agent 域（Phase 2 预留，mb_ai_cs.leads_preview）：models / schemas / extractor / router
+│   │   └── agent_doctor/         # 医生 Agent 域（Phase 3 预留）：models 占位
+│   ├── scripts/                  # 初始化与种子脚本（setup_db.py 建双库）
+│   ├── tests/                    # pytest 单元测试（TEST_DATABASE_URL 指向 mb_ai_core_test）
+│   └── main.py                   # FastAPI 应用入口（启动时双库 create_all）
+├── dify-workflows/               # Dify 导出 Workflow DSL (YAML)
+├── frp-client/                   # 内网穿透客户端（本地联调用）
 └── .agent/
     ├── config.json               # 全局模型行为、安全权限与排除目录配置
-    ├── prd.md                    # 肠道微生态 AI 智脑引擎 PRD 需求文档
+    ├── prd.md                    # 产品需求文档（旧版 MVP 底座，知识审核闭环继续复用）
+    ├── designs/
+    │   └── wechat-ai-cs-v2.md    # ★ 微信 AI 客服设计方案 v2（当前主线，140 行评审稿）
+    ├── design-review.md          # 方案评审意见（亮点 / 修正点 / 待确认）
     ├── prompts/
-    │   └── requirement_doc.txt   # 最新 MVP 需求与 API 契约快照
+    │   └── requirement_doc.txt   # 需求快照
     ├── rules/                    # 模块化代码规范库
     │   ├── api-conventions.md    # FastAPI RESTful API 规范
-    │   ├── code-style.md         # Python / Vue3 命名与异常处理规范
-    │   ├── database-schema.md    # PostgreSQL 3张核心表设计与索引规范
+    │   ├── code-style.md         # Python 命名与异常处理规范
+    │   ├── database-schema.md    # MySQL 8 双库表结构与索引规范（含 cs_chat_logs/session_state/leads_preview）
     │   └── medical-safety.md     # 医疗合规与客服 Guardrails 安全规则
-    └── commands/
-        ├── review.md             # 代码自审与 CR 标准
-        └── deploy.md             # Docker Compose 本地编排与部署脚本
+    └── workflows/
+        └── sync-requirement.md   # 需求同步流程
 ```
 
-### 4.5 业务蓝图与排期里程碑
+### 4.5 业务蓝图与排期里程碑（6 周计划）
 
-- **详细产品需求文档 (PRD)**：详见 `.agent/prd.md`
-    
-- **当前核心里程碑 (7-9 天 MVP)**：
-    
-    - [x] **[Day 1-2] 基建准备**：PostgreSQL 数据库搭建，初始化 `knowledge_items`、`unanswered_questions`、`sales_cases` 三张核心表；Dify 创建 `CS_KB` 与 `Sales_KB` 数据集。
-        
-    - [x] **[Day 3-5] 后端开发 & 客服闭环**：FastAPI 审核通过 Hook 与 Dify Sync API 联调；搭建 CS Agent Workflow 低分回调捕获逻辑。
-        
-    - [ ] **[Day 6-7] 销售 Copilot & Admin 后台**：开发 Vue3 审核后台（一键审核/同步）；完成企微侧边栏“话术推荐”与“案例一键提炼”提交功能。
-        
-    - [ ] **[Day 8-9] 闭环联调与 Demo**：跑通“问答捕获 $\rightarrow$ 审核同步 $\rightarrow$ 命中验证 $\rightarrow$ 销售案例沉淀”完整链路演示。
-        
+> 详细方案见 `.agent/designs/wechat-ai-cs-v2.md`；旧版"肠道 AI 智脑引擎 MVP"见 `.agent/prd.md`（其知识审核闭环能力继续复用）。
+
+- [x] **旧版 MVP 底座（已交付）**：knowledge_items / unanswered_questions / sales_cases 三表（现归入 `mb_ai_core`）；审核通过 Hook → Dify Sync；CS Agent Workflow DSL；种子数据与 pytest 9/9 通过。
+- [ ] **[W1] 基础架构与数据库设计（当前）**
+    - [x] Task 1.1 环境初始化：docker-compose 拉起 FastAPI；复用本地 Docker MySQL8（global-mysql8@3306）与 Redis（redis@6380/db3）；Dify 部署配置（docker-compose.dify.yml，镜像 1.16.1，db_postgres 宿主端口 5434 / redis 6381 避开宿主冲突）
+    - [x] Task 1.2 数据库表结构：`mb_ai_core`（knowledge_items/unanswered_questions/sales_cases）+ `mb_ai_cs`（cs_chat_logs/session_state/leads_preview）
+    - [x] Task 1.3 FastAPI 基础框架：SQLAlchemy 双引擎（core_engine/cs_engine）+ Redis 状态机管理模块
+- [ ] **[W2] 数据 ETL 清洗与知识库录入**：公众号文章/视频字幕采集清洗 → Semantic Chunking → FAQ 问答对（Q-to-Q）→ Dify FAQ KB / Product KB 检索阈值调优
+- [ ] **[W3] 微信生态接入与异步网关**：企微微信客服 API 加解密路由、Celery + Redis 异步队列、frp 内网穿透本地联调
+- [ ] **[W4] Dify 核心工作流与风控编排**：意图路由（FAQ 优先 → Product 降级）、医疗免责声明、敏感词拦截、Prompt 注入防护、HITL 转人工分支
+- [ ] **[W5] 全链路闭环**：对话日志 100% 落库、FAQ 导入模板与资料入库 SOP、全链路集成测试
+- [ ] **[W6] 灰度试运行与交付**：攻防测试、灰度、知识库待补充清单反哺、72 小时稳定性验收
 
 ## 5. 常用开发原子操作 (Core Workflows)
 
-在执行日常开发与测试时，请运行以下工作流指令：
-
 ### 🛠️ 后端启动与检查 (Backend Run & Lint)
 
-- **启动开发服务**：`uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
-    
+- **启动开发服务**：`cd backend && .venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000`
 - **代码质量检查**：`flake8 backend/` 或 `ruff check backend/`
-    
-- **预期结果**：服务正常在 `http://localhost:8000` 启动，Swagger 文档展示在 `/docs`，零致命 Warning。
-    
+- **预期结果**：服务正常在 `http://localhost:8000` 启动，Swagger 文档展示在 `/docs`，`/health` 返回 `{"status":"ok","redis":"ok"}`。
 
 ### 🐳 容器化本地编排 (Docker Local Environment)
 
-- **一键启动 PostgreSQL与服务**：`docker compose up -d`
-    
+- **一键启动网关栈（仅 backend，MySQL/Redis 复用宿主容器）**：`docker compose up -d`
+- **初始化 MySQL 双库**：`cd backend && .venv\Scripts\python.exe scripts\setup_db.py`（建 mb_ai_core / mb_ai_cs / 两个测试库）
+- **启动 Dify 私有化**：`docker compose -f docker-compose.dify.yml up -d`（首次拉镜像约需 10-20 分钟）
 - **查看服务日志**：`docker compose logs -f backend`
-    
 
 ### 🧪 自动化测试 (Testing)
 
-- **测试命令**：`pytest tests/`
-    
-- **提交流程**：在提交 Git 或更新逻辑前，**必须**确保 `tests/test_dify_sync.py` 与 `tests/test_knowledge_api.py` 全部通过。
-    
+- **测试命令**：`cd backend && $env:TEST_DATABASE_URL="mysql+pymysql://root:fumate@localhost:3306/mb_ai_core_test?charset=utf8mb4"; .venv\Scripts\python.exe -m pytest tests/ -v`
+- **提交流程**：提交 Git 或更新逻辑前，**必须**确保 `tests/` 下全部用例通过（含 knowledge 闭环 + chat/session 状态机）。
 
 ## 6. 动态记忆区 (Session Memory)
 
 > 🚨 **AI 助手硬性红线指令 (CRITICAL AI EXECUTABLE RULE)**：
-> 
 > 1. 每次当你【成功修复重大 Bug】、【完成关键代码重构】或【交付阶段性接口】后，**必须立刻调用文件改写工具**更新本小节。
->     
-> 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`（如 `2026-07-29 10:15`）。
->     
+> 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
->     
 
-- **最近一次同步时间**：2026-07-30 16:37
-    
-- **当前关注的架构焦点**：PostgreSQL 本地容器（端口 5433）已成功对接，`gut_health` 与 `gut_health_test` 数据库已建好并导入 10 条 CS FAQ 和 5 条 Sales Case 种子数据；Backend API 接口及 Dify Sync Mock 全部通过 9/9 自动化单元测试。下一步重点聚焦前端（Admin 审核后台与企微侧边栏 H5）开发或 Dify Workflow 线上联调。
-    
+- **最近一次同步时间**：2026-08-03 17:40
+
+- **当前关注的架构焦点**：后端代码目录已从"按技术层切分"（api/models/schemas/services）重构为"按业务域切分"（app/{core,clients,knowledge,agent_cs,agent_sales,agent_doctor}），与 MySQL 双库边界（mb_ai_core 知识库体系 / mb_ai_cs 客服会话体系）对齐：knowledge 域（横切共享三表 + 审核→Dify 同步）、agent_cs 域（对话日志湖 / 会话状态机 / 微信回调）、agent_sales 域（leads_preview + extractor Phase 2 占位）、agent_doctor 域（Phase 3 占位）；Dify 调用抽出为 clients/dify_client.py。所有 URL 前缀（/knowledge /admin /cs /chat /wechat /wx）保持不变，pytest 9/9 通过。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理。
+
 - **待办遗留事项 (Todo)**：
-    
-    - [x] 1. 在 PostgreSQL 中创建 `knowledge_items`、`unanswered_questions` 与 `sales_cases` 数据表及索引（DDL 已落库到 `.agent/rules/database-schema.md`）。
-        
-    - [x] 2. 编写 `POST /api/v1/admin/knowledge/{item_id}/approve` 接口，结合 `BackgroundTasks` 实现调用 Dify Dataset API 写入向量文档。
-        
-    - [x] 3. 编写 `POST /api/v1/cs/unanswered/capture` 回调接口，打通客服置信度得分 $< 0.65$ 时的自动缺口捕获逻辑。
-        
-    - [x] 4. 编写 `POST /api/v1/knowledge/submit` 接口，支持销售侧边栏提交结构化提炼后的案例（`source_type = 'SALES_CASE'`）。
-        
-    - [x] 5. 创建 Dify Workflow DSL（客服 Agent、销售 Copilot、案例提炼器）并导入说明。
-        
-    - [x] 6. 编写种子数据与 `pytest` 测试用例，完成本地联调。
-        
-    - [ ] 7. 开发 Admin 审核 Web 后台 (Vue 3 / React) 与企微侧边栏 H5 前端。
+    - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），MySQL 双库化。
+    - [x] 2. Redis 连接模块 `app/core/redis.py` + 会话状态机 `app/agent_cs/services.py`（db3，由 app/services/session_state.py 迁入）。
+    - [x] 3. 微信回调 POST 占位路由（先回 `success` 满足 5 秒约束，异步链路第 3 周接入）。
+    - [x] 4. docker-compose.yml 复用宿主 MySQL8/Redis；docker-compose.dify.yml（官方镜像 1.16.1，端口 5434/6381）。
+    - [ ] 5. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
+    - [ ] 6. 第 3 周：企微微信客服消息解密 + 主动推送、Celery 异步队列、frp 内网穿透联调。

@@ -9,10 +9,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base, get_db
-from app.models.knowledge import KnowledgeItem, KnowledgeStatus, UnansweredQuestion, UnansweredStatus
+from app.knowledge.models import KnowledgeItem, KnowledgeStatus, UnansweredQuestion, UnansweredStatus
 from main import app
 
-DATABASE_URL = os.getenv("TEST_DATABASE_URL", "postgresql://postgres:fumate@localhost:5433/gut_health_test")
+DATABASE_URL = os.getenv("TEST_DATABASE_URL", "mysql+pymysql://root:fumate@localhost:3306/mb_ai_core_test?charset=utf8mb4")
 engine = create_engine(DATABASE_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -30,15 +30,13 @@ client = TestClient(app)
 
 
 def setup_module():
+    # MySQL：外键约束需先 SET FOREIGN_KEY_CHECKS=0 才能按任意顺序 DROP；MySQL 无 DROP TYPE
     with engine.begin() as conn:
-        conn.exec_driver_sql("DROP TABLE IF EXISTS knowledge_items CASCADE;")
-        conn.exec_driver_sql("DROP TABLE IF EXISTS unanswered_questions CASCADE;")
-        conn.exec_driver_sql("DROP TABLE IF EXISTS sales_cases CASCADE;")
-        conn.exec_driver_sql("DROP TYPE IF EXISTS knowledge_domain CASCADE;")
-        conn.exec_driver_sql("DROP TYPE IF EXISTS knowledge_source_type CASCADE;")
-        conn.exec_driver_sql("DROP TYPE IF EXISTS knowledge_status CASCADE;")
-        conn.exec_driver_sql("DROP TYPE IF EXISTS unanswered_status CASCADE;")
-        conn.exec_driver_sql("DROP TYPE IF EXISTS sales_case_status CASCADE;")
+        conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=0;")
+        conn.exec_driver_sql("DROP TABLE IF EXISTS knowledge_items;")
+        conn.exec_driver_sql("DROP TABLE IF EXISTS unanswered_questions;")
+        conn.exec_driver_sql("DROP TABLE IF EXISTS sales_cases;")
+        conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1;")
     Base.metadata.create_all(bind=engine)
 
 
@@ -66,8 +64,8 @@ def test_approve_knowledge_triggers_sync_mock(monkeypatch):
         captured["args"] = kwargs
         return "fake-doc-id"
 
-    import app.services.dify_sync as dify_sync
-    monkeypatch.setattr(dify_sync, "sync_knowledge_to_dify", fake_sync)
+    import app.knowledge.services as knowledge_services
+    monkeypatch.setattr(knowledge_services, "sync_knowledge_to_dify", fake_sync)
 
     submit = client.post("/api/v1/knowledge/submit", json={
         "domain": "CS",

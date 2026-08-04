@@ -8,16 +8,14 @@
 - 医师 CDSS Agent（预留扩展，MVP 阶段仅做标签预留）
 
 ## 二、核心数据底座
-单一事实来源：PostgreSQL。
-三张核心表：
-- knowledge_items：统一知识与话术
-- unanswered_questions：客服未解答问题捕获
-- sales_cases：销售实战案例原文与 AI 提炼
+单一事实来源：MySQL 8 双库（2026-08-03 定稿修订，原 PostgreSQL 已弃用；Dify 自带 pg 仅作元数据库、向量库用 Weaviate）。
+- `mb_ai_core`（公共用户/知识库索引）：knowledge_items / unanswered_questions / sales_cases
+- `mb_ai_cs`（客服 Agent 专有库）：cs_chat_logs / session_state / leads_preview
 
 ## 三、Agent 与 RAG 配置
 - 引擎：Dify（私有化 Docker / SaaS API）
 - 模型：DeepSeek-V3/R1、Qwen-Max/Turbo
-- 向量库：Dify 自带 PGVector / Qdrant
+- 向量库：Dify 内置 Weaviate（非 PGVector；原 PGVector 选项已弃用）
 - 客服检索阈值：0.65（低于该值触发未解答捕获与转人工）
 - 客服 Dataset：CS_KB
 - 销售 Dataset：Sales_KB

@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
@@ -51,12 +51,13 @@ class SalesCaseStatus(str, enum.Enum):
 
 
 class KnowledgeItem(Base):
+    """统一知识库 / 话术库（mb_ai_core.knowledge_items）"""
     __tablename__ = "knowledge_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    domain = Column(Enum(KnowledgeDomain, name="knowledge_domain", create_type=True), nullable=False, default=KnowledgeDomain.CS)
-    source_type = Column(Enum(KnowledgeSourceType, name="knowledge_source_type", create_type=True), nullable=False, default=KnowledgeSourceType.MANUAL)
-    status = Column(Enum(KnowledgeStatus, name="knowledge_status", create_type=True), nullable=False, default=KnowledgeStatus.PENDING)
+    domain = Column(Enum(KnowledgeDomain, name="knowledge_domain"), nullable=False, default=KnowledgeDomain.CS)
+    source_type = Column(Enum(KnowledgeSourceType, name="knowledge_source_type"), nullable=False, default=KnowledgeSourceType.MANUAL)
+    status = Column(Enum(KnowledgeStatus, name="knowledge_status"), nullable=False, default=KnowledgeStatus.PENDING)
 
     title = Column(String(255), nullable=False)
     question = Column(Text)
@@ -69,9 +70,9 @@ class KnowledgeItem(Base):
     vector_doc_id = Column(String(255))
 
     created_by = Column(String(128))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    approved_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    approved_at = Column(DateTime)
     approved_by = Column(String(128))
 
     cs_gap = relationship("UnansweredQuestion", foreign_keys=[cs_gap_id])
@@ -80,10 +81,11 @@ class KnowledgeItem(Base):
     def approve(self, approved_by: str) -> None:
         self.status = KnowledgeStatus.APPROVED
         self.approved_by = approved_by
-        self.approved_at = datetime.now(timezone.utc)
+        self.approved_at = datetime.now()
 
 
 class UnansweredQuestion(Base):
+    """客服未解答问题捕获（mb_ai_core.unanswered_questions）"""
     __tablename__ = "unanswered_questions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -91,22 +93,23 @@ class UnansweredQuestion(Base):
     normalized_query = Column(Text)
     context = Column(JSON)
     match_score = Column(String(10))  # 保留小数位文本，避免精度问题
-    status = Column(Enum(UnansweredStatus, name="unanswered_status", create_type=True), nullable=False, default=UnansweredStatus.OPEN)
+    status = Column(Enum(UnansweredStatus, name="unanswered_status"), nullable=False, default=UnansweredStatus.OPEN)
 
     knowledge_item_id = Column(Integer, ForeignKey("knowledge_items.id", ondelete="SET NULL"))
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    resolved_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    resolved_at = Column(DateTime)
 
     def resolve(self, knowledge_item_id: Optional[int] = None) -> None:
         self.status = UnansweredStatus.RESOLVED
-        self.resolved_at = datetime.now(timezone.utc)
+        self.resolved_at = datetime.now()
         if knowledge_item_id:
             self.knowledge_item_id = knowledge_item_id
 
 
 class SalesCase(Base):
+    """销售实战案例（mb_ai_core.sales_cases）"""
     __tablename__ = "sales_cases"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -119,15 +122,15 @@ class SalesCase(Base):
     follow_up_script = Column(Text)
     extracted_summary = Column(JSON)
 
-    status = Column(Enum(SalesCaseStatus, name="sales_case_status", create_type=True), nullable=False, default=SalesCaseStatus.PENDING)
+    status = Column(Enum(SalesCaseStatus, name="sales_case_status"), nullable=False, default=SalesCaseStatus.PENDING)
     knowledge_item_id = Column(Integer, ForeignKey("knowledge_items.id", ondelete="SET NULL"))
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    approved_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    approved_at = Column(DateTime)
     approved_by = Column(String(128))
 
     def approve(self, approved_by: str) -> None:
         self.status = SalesCaseStatus.APPROVED
         self.approved_by = approved_by
-        self.approved_at = datetime.now(timezone.utc)
+        self.approved_at = datetime.now()
