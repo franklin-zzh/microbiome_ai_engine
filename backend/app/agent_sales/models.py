@@ -1,13 +1,13 @@
 """销售 Agent 业务域（Phase 2 预留）
 
-表归属：mb_ai_cs.leads_preview（线索预备表，与客服会话体系同库，便于跨域分析）
+表归属：mb_ai_engine.cs_leads_preview（线索预备表，与客服会话体系同前缀，便于跨域分析）
 """
 import enum
 
 from sqlalchemy import JSON, Column, DateTime, Enum, Integer, Numeric, String, Text, func
 
 from app.agent_cs.models import ChatChannel
-from app.core.database import BaseCs
+from app.core.database import Base
 
 
 class LeadStatus(str, enum.Enum):
@@ -17,9 +17,9 @@ class LeadStatus(str, enum.Enum):
     CLOSED = "CLOSED"
 
 
-class LeadsPreview(BaseCs):
-    """线索预备表：低置信度/高意向对话异步生成，供销售跟进（mb_ai_cs.leads_preview）"""
-    __tablename__ = "leads_preview"
+class LeadsPreview(Base):
+    """线索预备表：低置信度/高意向对话异步生成，供销售跟进（mb_ai_engine.cs_leads_preview）"""
+    __tablename__ = "cs_leads_preview"
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String(128), nullable=False)

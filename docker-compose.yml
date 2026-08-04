@@ -15,8 +15,8 @@ services:
       - "8000:8000"
     environment:
       # 容器内访问宿主机 MySQL/Redis 使用 host.docker.internal
-      - CORE_DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:-fumate}@host.docker.internal:3306/mb_ai_core?charset=utf8mb4
-      - CS_DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:-fumate}@host.docker.internal:3306/mb_ai_cs?charset=utf8mb4
+      # 单库 mb_ai_engine：表结构由 Alembic 管理，启动时自动 upgrade head
+      - DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:-fumate}@host.docker.internal:3306/mb_ai_engine?charset=utf8mb4
       - REDIS_URL=redis://:${REDIS_PASSWORD:-fumate}@host.docker.internal:6380/3
       - DIFY_BASE_URL=${DIFY_BASE_URL}
       - DIFY_API_KEY=${DIFY_API_KEY}
@@ -26,6 +26,6 @@ services:
       - DEBUG=${DEBUG:-true}
     volumes:
       - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     extra_hosts:
       - "host.docker.internal:host-gateway"

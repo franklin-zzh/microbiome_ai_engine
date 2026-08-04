@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.agent_sales.models import LeadsPreview
 from app.agent_sales.schemas import LeadsPreviewOut
-from app.core.database import get_db_cs
+from app.core.database import get_db
 
 router = APIRouter(prefix="/chat", tags=["sales"])
 
@@ -17,7 +17,7 @@ def list_leads(
     status: str = Query(None, pattern="^(NEW|ASSIGNED|CONVERTED|CLOSED)$"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db_cs),
+    db: Session = Depends(get_db),
 ):
     query = db.query(LeadsPreview)
     if status:

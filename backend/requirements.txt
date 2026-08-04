@@ -3,6 +3,7 @@ uvicorn[standard]>=0.30.0
 pydantic>=2.8.2
 pydantic-settings>=2.3.4
 sqlalchemy>=2.0.31
+alembic>=1.13.0
 pymysql>=1.1.0
 cryptography>=42.0.0
 redis>=5.0.0

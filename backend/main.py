@@ -3,21 +3,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.agent_cs import models as cs_models
+from app.agent_cs import models as cs_models  # noqa: F401  注册 CsChatLog / SessionState 到 Base
 from app.agent_cs.router import chat_router, wechat_router
-from app.agent_sales import models as sales_models  # noqa: F401  注册 LeadsPreview 到 BaseCs
+from app.agent_sales import models as sales_models  # noqa: F401  注册 LeadsPreview 到 Base
 from app.agent_sales.router import router as sales_router
-from app.core.database import core_engine, cs_engine
 from app.core.redis import redis_health
-from app.knowledge import models as knowledge_models
+from app.knowledge import models as knowledge_models  # noqa: F401  注册 KnowledgeItem 等到 Base
 from app.knowledge.router import admin_router, cs_router, router as knowledge_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # MySQL 双库建表：mb_ai_core（知识库体系） + mb_ai_cs（客服会话体系 + 销售线索）
-    knowledge_models.Base.metadata.create_all(bind=core_engine)
-    cs_models.BaseCs.metadata.create_all(bind=cs_engine)
+    # 表结构统一由 Alembic 迁移管理（alembic upgrade head），不再使用 create_all
     yield
 
 

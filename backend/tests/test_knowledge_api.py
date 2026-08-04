@@ -8,12 +8,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.core.database import Base, get_db
+from app.core.config import get_settings
+from app.core.database import get_db
 from app.knowledge.models import KnowledgeItem, KnowledgeStatus, UnansweredQuestion, UnansweredStatus
 from main import app
 
-DATABASE_URL = os.getenv("TEST_DATABASE_URL", "mysql+pymysql://root:fumate@localhost:3306/mb_ai_core_test?charset=utf8mb4")
-engine = create_engine(DATABASE_URL)
+settings = get_settings()
+# conftest 已把 DATABASE_URL 指向 mb_ai_engine_test；此处直接取测试库连接串
+engine = create_engine(settings.test_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -27,23 +29,15 @@ def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 # 后台任务（如审核通过后的 Dify 同步）自建 session 时也需指向测试库：
-# services.sync_approved_knowledge 在 db=None 时使用模块级 CoreSessionLocal（生产库），
+# services.sync_approved_knowledge 在 db=None 时使用模块级 SessionLocal（生产库），
 # 测试中将其替换为 TestingSessionLocal，否则后台任务查不到测试库里的 item
 import app.knowledge.services as knowledge_services
 
-knowledge_services.CoreSessionLocal = TestingSessionLocal
+knowledge_services.SessionLocal = TestingSessionLocal
 client = TestClient(app)
 
-
-def setup_module():
-    # MySQL：外键约束需先 SET FOREIGN_KEY_CHECKS=0 才能按任意顺序 DROP；MySQL 无 DROP TYPE
-    with engine.begin() as conn:
-        conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=0;")
-        conn.exec_driver_sql("DROP TABLE IF EXISTS knowledge_items;")
-        conn.exec_driver_sql("DROP TABLE IF EXISTS unanswered_questions;")
-        conn.exec_driver_sql("DROP TABLE IF EXISTS sales_cases;")
-        conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1;")
-    Base.metadata.create_all(bind=engine)
+# 表结构由 conftest.migrated_test_db 通过 `alembic upgrade head` 建好，
+# 不再需要 setup_module 里的手工 DROP + create_all。
 
 
 def test_submit_knowledge():

@@ -15,7 +15,7 @@ from sqlalchemy import (
     func,
 )
 
-from app.core.database import BaseCs
+from app.core.database import Base
 
 
 class ChatChannel(str, enum.Enum):
@@ -32,8 +32,8 @@ class SessionStateValue(str, enum.Enum):
     BLOCKED = "BLOCKED"
 
 
-class CsChatLog(BaseCs):
-    """全量对话日志湖：每一条用户消息与 AI 回复必须落库（mb_ai_cs.cs_chat_logs）"""
+class CsChatLog(Base):
+    """全量对话日志湖：每一条用户消息与 AI 回复必须落库（mb_ai_engine.cs_chat_logs）"""
     __tablename__ = "cs_chat_logs"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -57,9 +57,9 @@ class CsChatLog(BaseCs):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
-class SessionState(BaseCs):
-    """会话状态表：Redis 状态机的持久化镜像（mb_ai_cs.session_state）"""
-    __tablename__ = "session_state"
+class SessionState(Base):
+    """会话状态表：Redis 状态机的持久化镜像（mb_ai_engine.cs_session_state）"""
+    __tablename__ = "cs_session_state"
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String(128), nullable=False, unique=True, index=True)

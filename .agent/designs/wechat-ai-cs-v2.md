@@ -28,14 +28,14 @@ H5 官网聊天窗  ─┘        │                                          �
 企微群机器人 ────────────┘                                          ▼
                         │                                  意图分类 → FAQ KB(高阈值) → Product KB(降级)
                         ▼
-                 MySQL 8 双库：mb_ai_core（知识库索引）+ mb_ai_cs（cs_chat_logs / session_state / leads_preview）
+                 MySQL 8 单库 mb_ai_engine：core_*(知识库体系) + cs_*(cs_chat_logs / cs_session_state / cs_leads_preview)，Alembic 迁移
 ```
 
 ### 流程图（消息生命周期）
 ```
 用户消息 → 微信回调(5秒内回success) → Redis 上下文缓存 → Celery 队列
         → Dify 意图路由 → FAQ KB(高阈值) → 命中? 直接答 : 降级 Product/Procedure/Marketing KB
-        → 风控(敏感词/免责声明) → 回复内容 → 主动推送微信 → 全量日志落库 chat_logs
+        → 风控(敏感词/免责声明) → 回复内容 → 主动推送微信 → 全量日志落库 cs_chat_logs
         → 置信度<0.65 → 知识库待补充清单 / 转人工 → 企微通知
 ```
 
@@ -46,12 +46,13 @@ H5 官网聊天窗  ─┘        │                                          �
 | AI 中台 | Dify (Docker 部署) | 零代码/低代码编排 Workflow |
 | API 网关 | Python (FastAPI) | 微信加解密、状态机控场、调度 Dify |
 | 缓存与队列 | Redis | 5 秒异步回包、上下文临时存储、Celery 队列（本项目独占 db3） |
-| 持久化存储 | **MySQL 8 双库**：`mb_ai_core`（公共用户/知识库索引）+ `mb_ai_cs`（客服 Agent 专有，含 `cs_chat_logs`） | 对话日志湖 + 轻量线索表 |
+| 持久化存储 | **MySQL 8 单库 `mb_ai_engine`**：领域隔离靠表名前缀——`core_*`（知识库体系）+ `cs_*`（客服 Agent 专有，含 `cs_chat_logs`），表结构由 **Alembic** 迁移管理 | 对话日志湖 + 轻量线索表 |
 | 向量数据库 | **Dify 内置 Weaviate**（随 Dify 自带部署，**非 pgvector**） | 不单独维护 Milvus 集群 |
 
-> **存储选型说明（2026-08-03 定稿修订）**：原方案“MySQL / PostgreSQL 二选一”现定 **MySQL 8 双库**。
+> **存储选型说明（2026-08-04 修订）**：原方案“MySQL / PostgreSQL 二选一”先定 **MySQL 8 双库**，后于 2026-08-04 **合并为单库 `mb_ai_engine`**（`core_*` / `cs_*` 表名前缀隔离，双库数据经 `scripts/migrate_single_db.py` RENAME 迁移）。
 > Dify 官方架构自带 `db_postgres`（仅作为 Dify 元数据库，宿主端口 5434）与 Weaviate 向量库；
 > **业务数据（对话日志/会话状态/线索/知识库）100% 走 MySQL**，不承担任何 pgvector 向量职责。
+> 表结构变更统一走 Alembic 迁移（`backend/migrations/`），不再使用 create_all。
 
 ### 知识库：Knowledge Base v1（四库结构）
 - **Standard FAQ**：产品使用、效果、检测细节的高频 Q&A（独立 KB，高匹配阈值，置信度更高）
@@ -68,9 +69,9 @@ H5 官网聊天窗  ─┘        │                                          �
 
 ### 第 1 周：基础架构与数据库设计（当前）
 - **Task 1.1（2 天）环境初始化**：docker-compose.yml 一键拉起 FastAPI；复用本地 Docker 的 MySQL 8（global-mysql8@3306）与 Redis（redis@6380/db3）；验证 Dify 私有化部署稳定性，配置 Embedding 模型与 LLM API Key。
-- **Task 1.2（2 天）数据库表结构设计**：
-  - `mb_ai_core`（公共用户/知识库索引）：`knowledge_items` / `unanswered_questions` / `sales_cases`
-  - `mb_ai_cs`（客服 Agent 专有库）：`cs_chat_logs`（全量对话日志：OpenID、Context、RAG 召回切片、满意度、转人工标记）/ `session_state`（会话状态表）/ `leads_preview`（线索预备表）
+- **Task 1.2（2 天）数据库表结构设计**（单库 `mb_ai_engine`，表名前缀隔离，Alembic 迁移）：
+  - `core_*` 知识库体系：`core_knowledge_items` / `core_unanswered_questions` / `core_sales_cases`
+  - `cs_*` 客服会话体系：`cs_chat_logs`（全量对话日志：OpenID、Context、RAG 召回切片、满意度、转人工标记）/ `cs_session_state`（会话状态表）/ `cs_leads_preview`（线索预备表）
 - **Task 1.3（1 天）FastAPI 基础框架搭建**：初始化 FastAPI 项目结构，集成 SQLAlchemy/SQLModel，搭建 Redis 状态机管理模块。
 
 ### 第 2 周：数据 ETL 清洗与知识库录入

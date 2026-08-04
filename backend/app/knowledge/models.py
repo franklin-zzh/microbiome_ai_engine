@@ -51,8 +51,8 @@ class SalesCaseStatus(str, enum.Enum):
 
 
 class KnowledgeItem(Base):
-    """统一知识库 / 话术库（mb_ai_core.knowledge_items）"""
-    __tablename__ = "knowledge_items"
+    """统一知识库 / 话术库（mb_ai_engine.core_knowledge_items）"""
+    __tablename__ = "core_knowledge_items"
 
     id = Column(Integer, primary_key=True, index=True)
     domain = Column(Enum(KnowledgeDomain, name="knowledge_domain"), nullable=False, default=KnowledgeDomain.CS)
@@ -64,8 +64,8 @@ class KnowledgeItem(Base):
     answer = Column(Text, nullable=False)
     tags = Column(JSON, default=list)
 
-    cs_gap_id = Column(Integer, ForeignKey("unanswered_questions.id", ondelete="SET NULL"))
-    sales_case_id = Column(Integer, ForeignKey("sales_cases.id", ondelete="SET NULL"))
+    cs_gap_id = Column(Integer, ForeignKey("core_unanswered_questions.id", ondelete="SET NULL"))
+    sales_case_id = Column(Integer, ForeignKey("core_sales_cases.id", ondelete="SET NULL"))
 
     vector_doc_id = Column(String(255))
 
@@ -85,8 +85,8 @@ class KnowledgeItem(Base):
 
 
 class UnansweredQuestion(Base):
-    """客服未解答问题捕获（mb_ai_core.unanswered_questions）"""
-    __tablename__ = "unanswered_questions"
+    """客服未解答问题捕获（mb_ai_engine.core_unanswered_questions）"""
+    __tablename__ = "core_unanswered_questions"
 
     id = Column(Integer, primary_key=True, index=True)
     user_query = Column(Text, nullable=False)
@@ -95,7 +95,7 @@ class UnansweredQuestion(Base):
     match_score = Column(String(10))  # 保留小数位文本，避免精度问题
     status = Column(Enum(UnansweredStatus, name="unanswered_status"), nullable=False, default=UnansweredStatus.OPEN)
 
-    knowledge_item_id = Column(Integer, ForeignKey("knowledge_items.id", ondelete="SET NULL"))
+    knowledge_item_id = Column(Integer, ForeignKey("core_knowledge_items.id", ondelete="SET NULL"))
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -109,8 +109,8 @@ class UnansweredQuestion(Base):
 
 
 class SalesCase(Base):
-    """销售实战案例（mb_ai_core.sales_cases）"""
-    __tablename__ = "sales_cases"
+    """销售实战案例（mb_ai_engine.core_sales_cases）"""
+    __tablename__ = "core_sales_cases"
 
     id = Column(Integer, primary_key=True, index=True)
     submitted_by = Column(String(128), nullable=False)
@@ -123,7 +123,7 @@ class SalesCase(Base):
     extracted_summary = Column(JSON)
 
     status = Column(Enum(SalesCaseStatus, name="sales_case_status"), nullable=False, default=SalesCaseStatus.PENDING)
-    knowledge_item_id = Column(Integer, ForeignKey("knowledge_items.id", ondelete="SET NULL"))
+    knowledge_item_id = Column(Integer, ForeignKey("core_knowledge_items.id", ondelete="SET NULL"))
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

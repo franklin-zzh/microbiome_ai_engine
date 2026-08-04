@@ -8,9 +8,9 @@
 - 医师 CDSS Agent（预留扩展，MVP 阶段仅做标签预留）
 
 ## 二、核心数据底座
-单一事实来源：MySQL 8 双库（2026-08-03 定稿修订，原 PostgreSQL 已弃用；Dify 自带 pg 仅作元数据库、向量库用 Weaviate）。
-- `mb_ai_core`（公共用户/知识库索引）：knowledge_items / unanswered_questions / sales_cases
-- `mb_ai_cs`（客服 Agent 专有库）：cs_chat_logs / session_state / leads_preview
+单一事实来源：MySQL 8 单库 `mb_ai_engine`（2026-08-04 修订：原 PostgreSQL 已弃用，双库 mb_ai_core/mb_ai_cs 已合并；Dify 自带 pg 仅作元数据库、向量库用 Weaviate；表结构由 Alembic 迁移管理）。
+- `core_*` 知识库体系：core_knowledge_items / core_unanswered_questions / core_sales_cases
+- `cs_*` 客服会话体系：cs_chat_logs / cs_session_state / cs_leads_preview
 
 ## 三、Agent 与 RAG 配置
 - 引擎：Dify（私有化 Docker / SaaS API）
@@ -21,9 +21,9 @@
 - 销售 Dataset：Sales_KB
 
 ## 四、业务黄金闭环
-1. To-C 智能客服：用户提问 -> 检索 CS_KB -> 命中>=0.65 自动回答；命中<0.65 转人工并写入 unanswered_questions。
+1. To-C 智能客服：用户提问 -> 检索 CS_KB -> 命中>=0.65 自动回答；命中<0.65 转人工并写入 core_unanswered_questions。
 2. To-B 销售 Copilot：销售输入客户痛点 -> 检索 Sales_KB -> 生成 3 种话术；成交后可提炼案例上报。
-3. 数据自进化：Admin 审核 unanswered_questions 补答案 / 审核 sales_cases -> 触发 Sync Engine -> 写入 Dify Vector DB -> Agent 智商提升。
+3. 数据自进化：Admin 审核 core_unanswered_questions 补答案 / 审核 core_sales_cases -> 触发 Sync Engine -> 写入 Dify Vector DB -> Agent 智商提升。
 
 ## 五、安全合规（不可协商）
 - 客服 Agent 严禁给出疾病诊断和具体用药建议。

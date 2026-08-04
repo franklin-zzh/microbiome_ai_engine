@@ -4,7 +4,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.clients.dify_client import DifySyncError, sync_knowledge_to_dify
-from app.core.database import CoreSessionLocal
+from app.core.database import SessionLocal
 from app.knowledge.models import KnowledgeItem, KnowledgeStatus
 
 
@@ -12,7 +12,7 @@ def sync_approved_knowledge(item_id: int, db: Optional[Session] = None) -> None:
     """审核通过后异步同步到 Dify（后台任务执行，失败仅记日志不阻塞）"""
     close_db = False
     if db is None:
-        db = CoreSessionLocal()
+        db = SessionLocal()
         close_db = True
     try:
         item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()

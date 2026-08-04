@@ -13,7 +13,7 @@
 
 - **总体工期**：6 周（详见 §4.5 里程碑与 `.agent/designs/wechat-ai-cs-v2.md`）。
 
-- **当前开发阶段**：**第 1 周：基础架构与数据库设计**（docker-compose 环境初始化、MySQL 双库建表、FastAPI + Redis 状态机框架）。
+- **当前开发阶段**：**第 1 周：基础架构与数据库设计**（docker-compose 环境初始化、MySQL 单库建表、FastAPI + Redis 状态机框架）。
 
 ## 2. 技术栈与运行环境 (Tech Stack & Environment)
 
@@ -22,16 +22,16 @@
 - **核心语言/框架**：Python 3.11+ (FastAPI) + Pydantic v2 + SQLAlchemy 2.x
 - **Agent & RAG 引擎**：Dify (Docker 私有化部署，当前官方版本 `1.16.1`) + Embedding/LLM 自配 API Key
 - **缓存与队列**：Redis（本地 Docker `redis` 容器，`6380` 端口，密码 `fumate`，**本项目独占 db3**；会话状态机、5 秒异步回包上下文缓存；Celery 队列于第 3 周引入）
-- **数据存储**：**MySQL 8 双库**（本地 Docker `global-mysql8` 容器，`3306` 端口，root/fumate）：
-    - `mb_ai_core`：公共用户 / 知识库索引（knowledge_items / unanswered_questions / sales_cases）
-    - `mb_ai_cs`：客服 Agent 专有库（cs_chat_logs / session_state / leads_preview）
+- **数据存储**：**MySQL 8 单库 `mb_ai_engine`**（本地 Docker `global-mysql8` 容器，`3306` 端口，root/fumate）：
+    - 领域隔离靠表名前缀：`core_*` 知识库体系（core_knowledge_items / core_unanswered_questions / core_sales_cases）+ `cs_*` 客服会话体系（cs_chat_logs / cs_session_state / cs_leads_preview）
+    - **表结构统一由 Alembic 迁移管理**（`alembic upgrade head`），已废弃 `create_all()`；跨领域（core_* 与 cs_* 之间）不建物理外键，业务层逻辑关联，便于未来拆库
     - 向量库直接使用 Dify 内置 **Weaviate**（非 pgvector），不单独维护 Milvus
 - **微信生态**：企业微信「微信客服」API（加解密 + 消息收发）、公众号/服务号被动回复与客服消息、企微群机器人 Webhook
 - **环境限制**：Windows 11 + Docker Desktop (WSL2) 开发环境，部署目标为 Linux Docker 容器
 
 > **存储选型说明（2026-08-03 定稿修订）**：业务方要求沿用 MySQL（向量库由 Dify/单独承担，而非 PostgreSQL）。
-> 业务数据 100% 走 MySQL 8 双库；Dify 官方架构自带的 `db_postgres` 仅作为 Dify 元数据库（宿主端口 5434），不承担任何业务/向量职责。
-> 表 `chat_logs` 已更名为 `cs_chat_logs`（客服会话表统一 `cs_` 前缀）。
+> 业务数据 100% 走 MySQL 8 单库 `mb_ai_engine`；Dify 官方架构自带的 `db_postgres` 仅作为 Dify 元数据库（宿主端口 5434），不承担任何业务/向量职责。
+> 表 `chat_logs` 已更名为 `cs_chat_logs`；双库（mb_ai_core / mb_ai_cs）已于 2026-08-04 合并为单库 `mb_ai_engine`（表前缀隔离，见 scripts/migrate_single_db.py）。
 
 ## 3. 架构设计与核心规则 (Architecture & Rules)
 
@@ -44,13 +44,15 @@ H5 官网聊天窗  ─┘        │                                           
 企微群机器人 ────────────┘                                           ▼
                         │                                   意图分类 → FAQ KB(高阈值) → Product/Procedure/Marketing KB
                         ▼
-                 MySQL 8 双库：mb_ai_core(知识库索引) + mb_ai_cs(cs_chat_logs/session_state/leads_preview)
+                 MySQL 8 单库 mb_ai_engine：core_*(知识库体系) + cs_*(cs_chat_logs/cs_session_state/cs_leads_preview)，Alembic 迁移
 ```
 
 ### 3.2 核心规则
 
 1. **数据源头单一与解耦原则**：
-    - MySQL 为系统的 **Single Source of Truth**（双库：`mb_ai_core` 知识库体系 / `mb_ai_cs` 客服会话体系，跨库无外键依赖，业务层通过双引擎 `core_engine` + `cs_engine` 分别访问）。
+    - MySQL 为系统的 **Single Source of Truth**（单库 `mb_ai_engine`：`core_*` 知识库体系 / `cs_*` 客服会话体系，单引擎 + 单 Base，领域靠表名前缀隔离）。
+    - **跨领域不建物理外键**（core_* 与 cs_* 之间），仅在同领域（core_* 内部）保留 FK 保证完整性；跨域关联在 ORM 中保留字段、在 Service 层逻辑关联，未来拆库不被外键缠住。
+    - 表结构变更一律走 Alembic 迁移（migrations/），禁止在应用启动时 create_all；新增表/改字段 = 改模型 + `alembic revision --autogenerate`。
     - 知识项在关系库中控制生命周期（`DRAFT → PENDING → APPROVED → REJECTED`），严禁绕过数据库审核直接写入 Dify 向量库。
     - `cs_chat_logs` 沉淀全量对话日志（含 RAG 召回切片与得分），是后续用户画像与知识反哺的唯一数据湖。
 
@@ -80,15 +82,16 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 ├── docker-compose.dify.yml       # Dify 私有化部署（官方镜像 1.16.1，本地开发集）
 ├── backend/                      # FastAPI 网关服务
 │   ├── app/
-│   │   ├── core/                 # 公共基础设施：config / database(双引擎) / redis / wxbizmsgcrypt / logging
+│   │   ├── core/                 # 公共基础设施：config / database(单引擎+单Base) / redis / wxbizmsgcrypt / logging
 │   │   ├── clients/              # 外部服务 Client（dify_client.py：Dify SDK 统一封装）
-│   │   ├── knowledge/            # 知识库域（横切共享，mb_ai_core）：models / schemas / services / router
-│   │   ├── agent_cs/             # 客服 Agent 域（mb_ai_cs）：models / schemas / services(状态机) / router(含微信回调)
-│   │   ├── agent_sales/          # 销售 Agent 域（Phase 2 预留，mb_ai_cs.leads_preview）：models / schemas / extractor / router
+│   │   ├── knowledge/            # 知识库域（横切共享，mb_ai_engine.core_*）：models / schemas / services / router
+│   │   ├── agent_cs/             # 客服 Agent 域（mb_ai_engine.cs_*）：models / schemas / services(状态机) / router(含微信回调)
+│   │   ├── agent_sales/          # 销售 Agent 域（Phase 2 预留，mb_ai_engine.cs_leads_preview）：models / schemas / extractor / router
 │   │   └── agent_doctor/         # 医生 Agent 域（Phase 3 预留）：models 占位
-│   ├── scripts/                  # 初始化与种子脚本（setup_db.py 建双库）
-│   ├── tests/                    # pytest 单元测试（TEST_DATABASE_URL 指向 mb_ai_core_test）
-│   └── main.py                   # FastAPI 应用入口（启动时双库 create_all）
+│   ├── scripts/                  # 初始化与迁移脚本（setup_db.py 建单库 / migrate_single_db.py 双库→单库 / import_seed.py 种子）
+│   ├── migrations/               # Alembic 迁移（alembic.ini + env.py + versions/，连接串见 env.py get_url）
+│   ├── tests/                    # pytest 单元测试（conftest.py 自动指向 mb_ai_engine_test + alembic upgrade head 建表）
+│   └── main.py                   # FastAPI 应用入口（表结构由 Alembic 管理，启动不再 create_all）
 ├── dify-workflows/               # Dify 导出 Workflow DSL (YAML)
 ├── frp-client/                   # 内网穿透客户端（本地联调用）
 └── .agent/
@@ -102,7 +105,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
     ├── rules/                    # 模块化代码规范库
     │   ├── api-conventions.md    # FastAPI RESTful API 规范
     │   ├── code-style.md         # Python 命名与异常处理规范
-    │   ├── database-schema.md    # MySQL 8 双库表结构与索引规范（含 cs_chat_logs/session_state/leads_preview）
+    │   ├── database-schema.md    # MySQL 8 单库表结构与索引规范（mb_ai_engine：core_* + cs_*）
     │   └── medical-safety.md     # 医疗合规与客服 Guardrails 安全规则
     └── workflows/
         └── sync-requirement.md   # 需求同步流程
@@ -112,11 +115,12 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 
 > 详细方案见 `.agent/designs/wechat-ai-cs-v2.md`；旧版"肠道 AI 智脑引擎 MVP"见 `.agent/prd.md`（其知识审核闭环能力继续复用）。
 
-- [x] **旧版 MVP 底座（已交付）**：knowledge_items / unanswered_questions / sales_cases 三表（现归入 `mb_ai_core`）；审核通过 Hook → Dify Sync；CS Agent Workflow DSL；种子数据与 pytest 9/9 通过。
+- [x] **旧版 MVP 底座（已交付）**：knowledge_items / unanswered_questions / sales_cases 三表（现归入 `mb_ai_engine.core_*`）；审核通过 Hook → Dify Sync；CS Agent Workflow DSL；种子数据与 pytest 9/9 通过。
 - [ ] **[W1] 基础架构与数据库设计（当前）**
     - [x] Task 1.1 环境初始化：docker-compose 拉起 FastAPI；复用本地 Docker MySQL8（global-mysql8@3306）与 Redis（redis@6380/db3）；Dify 部署配置（docker-compose.dify.yml，镜像 1.16.1，db_postgres 宿主端口 5434 / redis 6381 避开宿主冲突）
-    - [x] Task 1.2 数据库表结构：`mb_ai_core`（knowledge_items/unanswered_questions/sales_cases）+ `mb_ai_cs`（cs_chat_logs/session_state/leads_preview）
-    - [x] Task 1.3 FastAPI 基础框架：SQLAlchemy 双引擎（core_engine/cs_engine）+ Redis 状态机管理模块
+    - [x] Task 1.2 数据库表结构：`mb_ai_engine` 单库 + `core_*`/`cs_*` 表名前缀（core_knowledge_items/core_unanswered_questions/core_sales_cases + cs_chat_logs/cs_session_state/cs_leads_preview）
+    - [x] Task 1.3 FastAPI 基础框架：SQLAlchemy 单引擎（engine/SessionLocal）+ Redis 状态机管理模块
+    - [x] Task 1.4 单库合并 + Alembic：双库 RENAME 迁移（scripts/migrate_single_db.py）→ 删除 create_all → `alembic init` + init_db 迁移 → 测试库 alembic upgrade head 建表（pytest 9/9）
 - [ ] **[W2] 数据 ETL 清洗与知识库录入**：公众号文章/视频字幕采集清洗 → Semantic Chunking → FAQ 问答对（Q-to-Q）→ Dify FAQ KB / Product KB 检索阈值调优
 - [ ] **[W3] 微信生态接入与异步网关**：企微微信客服 API 加解密路由、Celery + Redis 异步队列、frp 内网穿透本地联调
 - [ ] **[W4] Dify 核心工作流与风控编排**：意图路由（FAQ 优先 → Product 降级）、医疗免责声明、敏感词拦截、Prompt 注入防护、HITL 转人工分支
@@ -134,13 +138,15 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 ### 🐳 容器化本地编排 (Docker Local Environment)
 
 - **一键启动网关栈（仅 backend，MySQL/Redis 复用宿主容器）**：`docker compose up -d`
-- **初始化 MySQL 双库**：`cd backend && .venv\Scripts\python.exe scripts\setup_db.py`（建 mb_ai_core / mb_ai_cs / 两个测试库）
+- **初始化 MySQL 单库**：`cd backend && .venv\Scripts\python.exe scripts\setup_db.py`（建 mb_ai_engine / mb_ai_engine_test）
+- **双库 → 单库数据迁移（仅旧环境执行一次）**：`cd backend && .venv\Scripts\python.exe scripts\migrate_single_db.py`（RENAME TABLE 跨库搬表 + 索引改名），随后 `alembic stamp head`
+- **应用表结构迁移**：`cd backend && $env:DATABASE_URL="mysql+pymysql://root:fumate@localhost:3306/mb_ai_engine?charset=utf8mb4"; .venv\Scripts\python.exe -m alembic upgrade head`（docker compose 启动时自动执行）
 - **启动 Dify 私有化**：`docker compose -f docker-compose.dify.yml up -d`（首次拉镜像约需 10-20 分钟）
 - **查看服务日志**：`docker compose logs -f backend`
 
 ### 🧪 自动化测试 (Testing)
 
-- **测试命令**：`cd backend && $env:TEST_DATABASE_URL="mysql+pymysql://root:fumate@localhost:3306/mb_ai_core_test?charset=utf8mb4"; .venv\Scripts\python.exe -m pytest tests/ -v`
+- **测试命令**：`cd backend && .venv\Scripts\python.exe -m pytest tests/ -v`（conftest.py 自动指向 mb_ai_engine_test 并执行 alembic upgrade head 建表，无需手工设置 TEST_DATABASE_URL）
 - **提交流程**：提交 Git 或更新逻辑前，**必须**确保 `tests/` 下全部用例通过（含 knowledge 闭环 + chat/session 状态机）。
 
 ## 6. 动态记忆区 (Session Memory)
@@ -150,12 +156,12 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-04 01:50
+- **最近一次同步时间**：2026-08-04 11:33
 
-- **当前关注的架构焦点**：业务域重构已提交并迁移至根目录；Review 4 项低风险修复已落地——① knowledge/router.py 后台任务不再传请求级 db（services 自建 session，线程安全）② wxbizmsgcrypt.py 签名比对改 hmac.compare_digest + 解密后校验 receive_id（未配置时向后兼容）③ main.py CORS 去掉 allow_credentials（与 allow_origins=["*"] 非法组合）④ uvicorn.pid / .reasonix 移出 git 并加入 .gitignore。pytest 待复验。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
+- **当前关注的架构焦点**：数据库已从双库（mb_ai_core / mb_ai_cs）合并为单库 `mb_ai_engine`（core_*/cs_* 表名前缀隔离），引入 Alembic 取代 create_all（migrations/ + init_db 基线），测试基建改为 conftest 里 alembic upgrade head 建表（pytest 9/9 通过）；跨领域（core_* ↔ cs_*）不建物理外键，领域内 FK 保留。下次迭代改表流程：改模型 → `alembic revision --autogenerate` → 审阅迁移 → `alembic upgrade head`。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
 
 - **待办遗留事项 (Todo)**：
-    - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），MySQL 双库化。
+    - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。
     - [x] 2. Redis 连接模块 `app/core/redis.py` + 会话状态机 `app/agent_cs/services.py`（db3，由 app/services/session_state.py 迁入）。
     - [x] 3. 微信回调 POST 占位路由（先回 `success` 满足 5 秒约束，异步链路第 3 周接入）。
     - [x] 4. docker-compose.yml 复用宿主 MySQL8/Redis；docker-compose.dify.yml（官方镜像 1.16.1，端口 5434/6381）。

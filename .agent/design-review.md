@@ -8,7 +8,7 @@
 
 ## 二、亮点（保留）
 
-1. **双轨 RAG（FAQ 高阈值 + Product 混合检索）**：FAQ 问答对用高匹配阈值保证"常见问题 100% 命中"，长尾问题降级到 Product KB 混合检索 + Rerank——比单一向量库更稳，且与现有 `unanswered_questions` 低分捕获机制衔接自然。
+1. **双轨 RAG（FAQ 高阈值 + Product 混合检索）**：FAQ 问答对用高匹配阈值保证"常见问题 100% 命中"，长尾问题降级到 Product KB 混合检索 + Rerank——比单一向量库更稳，且与现有 `core_unanswered_questions` 低分捕获机制衔接自然。
 2. **5 秒异步回包设计正确**：微信/企微回调硬约束 5 秒内必须返回 `success`，方案用 Redis 缓存 + Celery 队列异步处理 + 完成后主动推送，这是官方 API 下的唯一正确做法；回调接口内严禁同步调 Dify。
 3. **全量日志落库（Data Lake 闭环）**：`chat_logs` 沉淀上下文 + RAG 召回切片得分，直接支撑第 6 周"知识库待补充清单"反哺与用户画像分析——方案把数据当作资产而非垃圾，是最大亮点。
 4. **合规与 HITL 齐备**：医疗免责声明、敏感词拦截、Prompt 注入防护、"转人工"状态机，医疗健康场景刚需。
@@ -16,7 +16,7 @@
 
 ## 三、修正点（已在本项目落地时处理）
 
-1. **存储选型定 MySQL 8 双库**（方案原文"MySQL / PostgreSQL"二选一，业务方要求沿用 MySQL）：落地为 `mb_ai_core`（公共用户/知识库索引）+ `mb_ai_cs`（客服 Agent 专有，含 `cs_chat_logs`）；Dify 官方自带 `db_postgres` 仅作其元数据库（宿主端口 5434），向量库用 Weaviate（非 pgvector）。已写入 `AGENT.md`、设计稿与 `database-schema.md`。
+1. **存储选型定 MySQL 单库 `mb_ai_engine`**（方案原文"MySQL / PostgreSQL"二选一，业务方要求沿用 MySQL）：2026-08-03 定双库 `mb_ai_core` + `mb_ai_cs`，2026-08-04 合并为单库（`core_*` / `cs_*` 表名前缀隔离，跨领域不建物理外键；双库数据经 `scripts/migrate_single_db.py` RENAME 迁移，表结构由 Alembic 管理）；Dify 官方自带 `db_postgres` 仅作其元数据库（宿主端口 5434），向量库用 Weaviate（非 pgvector）。已写入 `AGENT.md`、设计稿与 `database-schema.md`。
 2. **"微信客服"需按 channel 区分**：企微「微信客服」（单聊，主动推送受 48h 会话窗口限制）、公众号/服务号（被动回复 + 客服消息，两套不同 API）、H5 官网聊天窗、企微群机器人（Webhook，无状态）是**四类不同接入**。表结构统一加 `channel` 枚举字段（`WXKF / MP / H5 / WECOM_GROUP`），回调路由按 channel 分派。群机器人按群维度建 session，非 @ 消息静默。
 3. **Dify 部署方式**：Dify 官方 compose 极其庞大（api/worker/web/db/redis/sandbox/ssrf_proxy/weaviate/nginx 等，当前版本 1.16.1），不适合塞进主 docker-compose。落地为：主 `docker-compose.yml` 只管理网关栈（PostgreSQL+Redis+backend），另立 `docker-compose.dify.yml` 部署 Dify（官方镜像，端口不冲突）。
 4. **第一周不引入 Celery**：方案本身把 Celery 放在第 3 周 Task 3.2，第 1 周仅需 Redis 状态机 + 缓存能力。保持该节奏，避免过早引入任务队列复杂度。

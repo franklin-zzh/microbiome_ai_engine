@@ -1,4 +1,4 @@
-"""知识库域（横切共享，mb_ai_core）：REST 路由
+"""知识库域（横切共享，mb_ai_engine.core_*）：REST 路由
 
 - router（/knowledge）：知识项提交 / 销售案例提交
 - admin_router（/admin）：知识审核与列表

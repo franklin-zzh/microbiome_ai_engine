@@ -34,7 +34,7 @@
    > “您描述的情况可能涉及健康风险，我这边无法在线判断。建议您尽快联系专业医生或拨打客服热线。我马上为您转接专属健康顾问。”
 2. 同时调用后端回调：
    - `POST /api/v1/cs/unanswered/capture`
-   - body 中标记 `risk_flag=true`，写入 `unanswered_questions`。
+   - body 中标记 `risk_flag=true`，写入 `core_unanswered_questions`。
 3. 前端（小程序 / 公众号）立即展示企微二维码或拉起客服会话。
 
 ## 4. 客服 Agent 系统提示模板（强制前缀）

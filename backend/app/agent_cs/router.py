@@ -1,6 +1,6 @@
 """客服 Agent 业务域：REST 路由
 
-- chat_router：对话日志湖 / 会话状态机（mb_ai_cs）
+- chat_router：对话日志湖 / 会话状态机（mb_ai_engine.cs_*）
 - wechat_router：企微「微信客服」/ 公众号回调入口（5 秒内必须回 success，AI 逻辑异步化）
 """
 from typing import Optional
@@ -19,7 +19,7 @@ from app.agent_cs.schemas import (
     SessionStateOut,
 )
 from app.core.config import get_settings
-from app.core.database import get_db_cs
+from app.core.database import get_db
 from app.core.logging import structured_log
 from app.core.redis import get_redis
 from app.core.wxbizmsgcrypt import WXBizMsgCrypt
@@ -35,7 +35,7 @@ settings = get_settings()
 @chat_router.post("/logs", response_model=CsChatLogOut)
 def create_cs_chat_log(
     body: CsChatLogCreate,
-    db: Session = Depends(get_db_cs),
+    db: Session = Depends(get_db),
 ):
     """写入一条全量对话日志（Data Lake 闭环入口）
 
@@ -78,7 +78,7 @@ def list_cs_chat_logs(
     hit_human: bool = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db_cs),
+    db: Session = Depends(get_db),
 ):
     query = db.query(CsChatLog)
     if session_id:
@@ -98,7 +98,7 @@ def list_cs_chat_logs(
 @chat_router.get("/session/{session_id}", response_model=SessionStateOut)
 def get_session_state(
     session_id: str,
-    db: Session = Depends(get_db_cs),
+    db: Session = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
     """读取会话状态（Redis 优先，DB 兜底重建）"""
@@ -122,7 +122,7 @@ def get_session_state(
 def route_message(
     session_id: str,
     body: dict,
-    db: Session = Depends(get_db_cs),
+    db: Session = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
     """入站消息路由（状态机分流）——微信回调异步链路的入口判断
@@ -162,7 +162,7 @@ def route_message(
 @chat_router.post("/session/{session_id}/release")
 def release_session(
     session_id: str,
-    db: Session = Depends(get_db_cs),
+    db: Session = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
     """人工接管完成 / 管理员重置会话状态 -> NORMAL"""

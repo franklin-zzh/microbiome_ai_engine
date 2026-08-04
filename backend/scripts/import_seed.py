@@ -5,12 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.database import CoreSessionLocal, core_engine
-from app.knowledge.models import Base, KnowledgeItem, KnowledgeStatus, SalesCase, SalesCaseStatus
+from app.core.database import SessionLocal
+from app.knowledge.models import KnowledgeItem, KnowledgeStatus, SalesCase, SalesCaseStatus
 
 
 def import_cs_faq(path: str) -> int:
-    db = CoreSessionLocal()
+    db = SessionLocal()
     count = 0
     try:
         with open(path, encoding="utf-8") as f:
@@ -36,7 +36,7 @@ def import_cs_faq(path: str) -> int:
 
 
 def import_sales_cases(path: str) -> int:
-    db = CoreSessionLocal()
+    db = SessionLocal()
     count = 0
     try:
         with open(path, encoding="utf-8") as f:
@@ -83,8 +83,14 @@ def import_sales_cases(path: str) -> int:
 
 
 if __name__ == "__main__":
-    Base.metadata.create_all(bind=core_engine)
-    base_dir = Path(__file__).resolve().parent.parent
+    # 表结构统一由 Alembic 管理：先 upgrade head（幂等），不再使用 create_all
+    from alembic import command
+    from alembic.config import Config
+
+    backend_root = Path(__file__).resolve().parent.parent
+    command.upgrade(Config(str(backend_root / "alembic.ini")), "head")
+
+    base_dir = backend_root
     cs_count = import_cs_faq(str(base_dir / "seed" / "cs_faq_seed.json"))
     sales_count = import_sales_cases(str(base_dir / "seed" / "sales_script_seed.json"))
     print(f"Imported {cs_count} CS FAQs and {sales_count} sales cases (PENDING status).")
