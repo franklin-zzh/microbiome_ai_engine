@@ -73,7 +73,7 @@ class SessionState(Base):
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    expires_at = Column(DateTime)  # 与 Redis TTL 对齐
+    expires_at = Column(DateTime)  # 会话不活跃过期时间点：每次 route 滚动刷新（now + session_ttl_seconds），与 Redis TTL 对齐
 
     def mark_human(self, reason: str = "user_request") -> None:
         self.state = SessionStateValue.HUMAN_MODE

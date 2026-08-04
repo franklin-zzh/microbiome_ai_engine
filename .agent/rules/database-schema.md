@@ -47,6 +47,7 @@ CREATE TABLE core_knowledge_items (
     domain          ENUM('CS','SALES','DOCTOR') NOT NULL DEFAULT 'CS',
     source_type     ENUM('MANUAL','CS_GAP','SALES_CASE') NOT NULL DEFAULT 'MANUAL',
     status          ENUM('DRAFT','PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+    category        VARCHAR(64) NOT NULL DEFAULT 'GENERAL',  -- 主分类（强规范枚举/路径，如 product.probiotics）；与 tags 职责分离，支持索引筛选
 
     title           VARCHAR(255) NOT NULL,
     question        TEXT,                       -- 客服 FAQ 的“问题”
@@ -67,7 +68,7 @@ CREATE TABLE core_knowledge_items (
     approved_by     VARCHAR(128)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 索引以 models.py 为准（index=True 自动命名 ix_<表名>_<列>），如 ix_core_knowledge_items_id
+-- 索引以 models.py 为准（index=True 自动命名 ix_<表名>_<列>），如 ix_core_knowledge_items_id / ix_core_knowledge_items_category（category 等值筛选）
 ```
 
 ### 2.2 core_unanswered_questions（客服未解答问题捕获 · core_* 领域）
@@ -214,7 +215,7 @@ CREATE TABLE cs_session_state (
 
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    expires_at      DATETIME                        -- 会话过期时间（与 Redis TTL 对齐）
+    expires_at      DATETIME                        -- 会话不活跃过期时间点：每次 route 滚动刷新（now + session_ttl_seconds），与 Redis TTL 对齐
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- 索引：ix_cs_session_state_id / ix_cs_session_state_open_id / ix_cs_session_state_session_id(unique)
 ```
@@ -251,7 +252,9 @@ NORMAL ────────────► HUMAN_MODE ◄──────�
 
 - 运行时状态存 Redis：`session:{session_id}:state`，TTL 默认 30 分钟，`session:{session_id}:neg_streak` 计数。
 - Redis 连接：`redis://:fumate@localhost:6380/3`（本地 Docker `redis` 容器，**本项目独占 db3**，db0-2 留给其他项目/Dify 调试）。
-- `cs_session_state` 表为持久化镜像：Redis 丢失或过期后从表重建；`state` 变化时同步写表。
+- `cs_session_state` 表为持久化镜像：`state` 变化时同步写表，`expires_at` 每次 route 滚动刷新（now + TTL）。
+- **DB 兜底恢复**：Redis 状态缺失（TTL 过期/重启）时，下次 route 前从 `cs_session_state` 恢复 `HUMAN_MODE/BLOCKED` 并续 TTL（`router._restore_state_from_db`）——防止用户沉默超 TTL 后回来，转人工/拦截状态丢失导致 AI 重新抢答；`GET /session` 在 Redis 缺失时展示 DB 最后状态。
+- **清理策略**：行在"不活跃过期后再保留 `session_retention_days`（默认 30 天）"才删除。双通道：① 惰性清理——每次 route 顺带 `DELETE ... WHERE COALESCE(expires_at, updated_at) < now - 保留期 LIMIT 200`（`router._lazy_cleanup_expired`）；② `scripts/cleanup_sessions.py`（支持 `--dry-run`，W3 Celery 落地后可挂定时）。历史 NULL `expires_at` 行用 `updated_at` 兜底。
 - `HUMAN_MODE` 下 AI 停止抢答；`BLOCKED` 下仅输出固定安全话术并转人工。
 
 ## 8. 表结构迭代纪律（Alembic）

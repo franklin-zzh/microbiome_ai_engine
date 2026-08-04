@@ -10,6 +10,8 @@ class KnowledgeItemBase(BaseModel):
     question: Optional[str] = None
     answer: str = Field(..., min_length=1)
     tags: Optional[List[str]] = Field(default_factory=list)
+    # 主分类（强规范枚举/路径，如 product.probiotics），默认 GENERAL；与 tags 扁平标签职责分离
+    category: str = Field(default="GENERAL", max_length=64)
 
 
 class KnowledgeItemCreate(KnowledgeItemBase):

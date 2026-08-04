@@ -3,11 +3,13 @@
 - chat_router：对话日志湖 / 会话状态机（mb_ai_engine.cs_*）
 - wechat_router：企微「微信客服」/ 公众号回调入口（5 秒内必须回 success，AI 逻辑异步化）
 """
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from redis import Redis
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.agent_cs import services as sm
@@ -22,7 +24,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.logging import structured_log
 from app.core.redis import get_redis
-from app.core.wxbizmsgcrypt import WXBizMsgCrypt
+from app.clients.wx.wxbizmsgcrypt import WXBizMsgCrypt
 
 chat_router = APIRouter(prefix="/chat", tags=["chat"])
 wechat_router = APIRouter(tags=["wechat_kf"])
@@ -95,17 +97,53 @@ def list_cs_chat_logs(
 # ============ 会话状态机 ============
 
 
+def _restore_state_from_db(db: Session, redis: Redis, session_id: str) -> Optional[SessionState]:
+    """Redis 状态缺失（TTL 过期/重启）时，从 cs_session_state 恢复状态并续 TTL。
+
+    只恢复 HUMAN_MODE / BLOCKED（NORMAL 是默认态，恢复无意义）；
+    防止用户沉默超过 TTL 后回来，转人工/拦截状态丢失导致 AI 重新抢答。
+    """
+    record = db.query(SessionState).filter(SessionState.session_id == session_id).first()
+    state_key = sm.SESSION_STATE_KEY.format(session_id=session_id)
+    if record is not None and record.state != SessionStateValue.NORMAL and not redis.exists(state_key):
+        sm.set_state(redis, session_id, record.state.value)
+        structured_log(
+            event="session_state_restored_from_db",
+            status=record.state.value,
+            extra={"session_id": session_id},
+        )
+    return record
+
+
+def _lazy_cleanup_expired(db: Session) -> None:
+    """惰性清理：删除不活跃超过保留期（session_retention_days）的状态行，LIMIT 防长锁。
+
+    保留语义：expires_at（滚动刷新）= 最后活跃 + TTL；行在 expires_at 早于
+    now - 保留期 时才删除（即不活跃满保留期）。历史 NULL 行用 updated_at 兜底。
+    """
+    cutoff = datetime.now() - timedelta(days=settings.session_retention_days)
+    db.execute(
+        text(
+            "DELETE FROM cs_session_state "
+            "WHERE COALESCE(expires_at, updated_at) < :cutoff LIMIT 200"
+        ),
+        {"cutoff": cutoff},
+    )
+
+
 @chat_router.get("/session/{session_id}", response_model=SessionStateOut)
 def get_session_state(
     session_id: str,
     db: Session = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ):
-    """读取会话状态（Redis 优先，DB 兜底重建）"""
-    state = sm.get_state(redis, session_id)
+    """读取会话状态（Redis 优先；Redis 缺失时展示 DB 中最后持久化的状态）"""
     record = db.query(SessionState).filter(SessionState.session_id == session_id).first()
     if record is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    state = sm.get_state(redis, session_id)
+    if not redis.exists(sm.SESSION_STATE_KEY.format(session_id=session_id)):
+        state = record.state.value  # Redis 缺失时回退到 DB 最后状态
     return SessionStateOut(
         session_id=record.session_id,
         channel=record.channel.value,
@@ -134,20 +172,28 @@ def route_message(
     if not user_message:
         raise HTTPException(status_code=422, detail="user_message is required")
 
+    # DB 兜底恢复（必须先于 route_incoming：恢复后的 HUMAN_MODE/BLOCKED 参与本次分流）
+    record = _restore_state_from_db(db, redis, session_id)
+
     result = sm.route_incoming(redis, session_id, user_message)
 
-    # 持久化状态镜像（存在则更新，不存在则创建）
-    record = db.query(SessionState).filter(SessionState.session_id == session_id).first()
+    # 惰性清理过期状态行（顺带执行，不阻塞主流程）
+    _lazy_cleanup_expired(db)
+
+    # 持久化状态镜像（存在则更新，不存在则创建）；expires_at 滚动刷新（与 Redis TTL 对齐）
+    expires_at = datetime.now() + timedelta(seconds=settings.session_ttl_seconds)
     if record is None:
         record = SessionState(
             session_id=session_id,
             channel=body.get("channel", "WXKF"),
             open_id=body.get("open_id", ""),
             state=SessionStateValue(result["state"]),
+            expires_at=expires_at,
         )
         db.add(record)
     else:
         record.state = SessionStateValue(result["state"])
+        record.expires_at = expires_at
         if result["state"] == sm.STATE_NORMAL:
             record.negative_streak = 0
     db.commit()
@@ -170,6 +216,7 @@ def release_session(
     record = db.query(SessionState).filter(SessionState.session_id == session_id).first()
     if record:
         record.reset()
+        record.expires_at = datetime.now() + timedelta(seconds=settings.session_ttl_seconds)
         db.commit()
     return {"session_id": session_id, "state": sm.STATE_NORMAL}
 

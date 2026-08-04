@@ -58,6 +58,8 @@ class KnowledgeItem(Base):
     domain = Column(Enum(KnowledgeDomain, name="knowledge_domain"), nullable=False, default=KnowledgeDomain.CS)
     source_type = Column(Enum(KnowledgeSourceType, name="knowledge_source_type"), nullable=False, default=KnowledgeSourceType.MANUAL)
     status = Column(Enum(KnowledgeStatus, name="knowledge_status"), nullable=False, default=KnowledgeStatus.PENDING)
+    # 主分类（强规范枚举/路径，如 product.probiotics），与 tags（扁平标签）职责分离，支持索引筛选
+    category = Column(String(64), nullable=False, default="GENERAL", server_default="GENERAL", index=True)
 
     title = Column(String(255), nullable=False)
     question = Column(Text)

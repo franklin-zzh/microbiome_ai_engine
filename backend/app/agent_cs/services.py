@@ -12,7 +12,7 @@ Redis 键设计：
 
 运行时以 Redis 为准；session_state 表为持久化镜像，Redis 丢失后由表重建。
 """
-from datetime import datetime, timedelta, timezone
+import json
 from typing import Optional
 
 from redis import Redis
@@ -58,11 +58,11 @@ def set_state(redis: Redis, session_id: str, state: str, ttl: Optional[int] = No
     return state
 
 
-def increment_negative_streak(redis: Redis, session_id: str) -> int:
-    """连续负面情绪计数 +1，返回当前计数"""
+def increment_negative_streak(redis: Redis, session_id: str, ttl: Optional[int] = None) -> int:
+    """连续负面情绪计数 +1，返回当前计数（ttl 显式传入时覆盖默认会话 TTL）"""
     key = SESSION_NEG_KEY.format(session_id=session_id)
     count = redis.incr(key)
-    redis.expire(key, _ttl())
+    redis.expire(key, ttl or _ttl())
     return count
 
 
@@ -75,9 +75,9 @@ def should_answer(redis: Redis, session_id: str) -> bool:
     return get_state(redis, session_id) == STATE_NORMAL
 
 
-def mark_human(redis: Redis, session_id: str, reason: str = "user_request") -> str:
+def mark_human(redis: Redis, session_id: str, reason: str = "user_request", ttl: Optional[int] = None) -> str:
     """用户请求转人工 / 连续负面情绪 -> HUMAN_MODE"""
-    state = set_state(redis, session_id, STATE_HUMAN_MODE)
+    state = set_state(redis, session_id, STATE_HUMAN_MODE, ttl=ttl)
     structured_log(
         event="session_mark_human",
         status=STATE_HUMAN_MODE,
@@ -86,9 +86,9 @@ def mark_human(redis: Redis, session_id: str, reason: str = "user_request") -> s
     return state
 
 
-def mark_blocked(redis: Redis, session_id: str, reason: str = "risk_keyword") -> str:
+def mark_blocked(redis: Redis, session_id: str, reason: str = "risk_keyword", ttl: Optional[int] = None) -> str:
     """命中高风险医疗关键词 -> BLOCKED"""
-    state = set_state(redis, session_id, STATE_BLOCKED)
+    state = set_state(redis, session_id, STATE_BLOCKED, ttl=ttl)
     structured_log(
         event="session_mark_blocked",
         status=STATE_BLOCKED,
@@ -97,9 +97,9 @@ def mark_blocked(redis: Redis, session_id: str, reason: str = "risk_keyword") ->
     return state
 
 
-def release_human(redis: Redis, session_id: str) -> str:
+def release_human(redis: Redis, session_id: str, ttl: Optional[int] = None) -> str:
     """人工接管完成 / 管理员重置 -> 回 NORMAL"""
-    state = set_state(redis, session_id, STATE_NORMAL)
+    state = set_state(redis, session_id, STATE_NORMAL, ttl=ttl)
     reset_negative_streak(redis, session_id)
     structured_log(
         event="session_release_human",
@@ -120,6 +120,11 @@ def contains_keyword(text: str, keywords: tuple) -> Optional[str]:
 def route_incoming(redis: Redis, session_id: str, user_message: str) -> dict:
     """入站消息统一分流：返回该消息应走的处理路径
 
+    优先级（医疗风控 > 转人工诉求）：
+        BLOCKED 状态（保持熔断）> 命中高风险医疗关键词 -> BLOCKED
+        > 命中转人工关键词 / 已是 HUMAN_MODE -> HUMAN_MODE
+        > 其余 -> NORMAL（AI 正常作答）
+
     Returns:
         {
           "state": NORMAL/HUMAN_MODE/BLOCKED,
@@ -130,38 +135,35 @@ def route_incoming(redis: Redis, session_id: str, user_message: str) -> dict:
     """
     state = get_state(redis, session_id)
 
+    # 已 BLOCKED：保持熔断，不参与后续任何分流
     if state == STATE_BLOCKED:
         return {"state": state, "hit_keyword": None, "negative_streak": 0, "should_answer": False}
 
-    # 转人工关键词（最高优先级）
-    human_kw = contains_keyword(user_message, HUMAN_REQUEST_KEYWORDS)
-    if human_kw or state == STATE_HUMAN_MODE:
-        mark_human(redis, session_id, reason=f"keyword:{human_kw}" if human_kw else "already_human")
-        return {"state": STATE_HUMAN_MODE, "hit_keyword": human_kw, "negative_streak": 0, "should_answer": False}
-
-    # 高风险医疗关键词 -> BLOCKED
+    # 高风险医疗关键词（最高优先级，覆盖转人工诉求；HUMAN_MODE 下也升级为 BLOCKED）
     risk_kw = contains_keyword(user_message, RISK_KEYWORDS)
     if risk_kw:
         mark_blocked(redis, session_id, reason=f"risk_keyword:{risk_kw}")
         return {"state": STATE_BLOCKED, "hit_keyword": risk_kw, "negative_streak": 0, "should_answer": False}
 
+    # 转人工关键词 / 已是 HUMAN_MODE
+    human_kw = contains_keyword(user_message, HUMAN_REQUEST_KEYWORDS)
+    if human_kw or state == STATE_HUMAN_MODE:
+        mark_human(redis, session_id, reason=f"keyword:{human_kw}" if human_kw else "already_human")
+        return {"state": STATE_HUMAN_MODE, "hit_keyword": human_kw, "negative_streak": 0, "should_answer": False}
+
     return {"state": state, "hit_keyword": None, "negative_streak": 0, "should_answer": True}
 
 
-def snapshot_context(redis: Redis, session_id: str, context: dict) -> None:
-    """保存上下文快照（异步任务消费后写入）"""
-    import json
-
+def snapshot_context(redis: Redis, session_id: str, context: dict, ttl: Optional[int] = None) -> None:
+    """保存上下文快照（异步任务消费后写入；ttl 显式传入时覆盖默认会话 TTL）"""
     redis.set(
         SESSION_CTX_KEY.format(session_id=session_id),
         json.dumps(context, ensure_ascii=False),
-        ex=_ttl(),
+        ex=ttl or _ttl(),
     )
 
 
 def get_context(redis: Redis, session_id: str) -> Optional[dict]:
-    import json
-
     raw = redis.get(SESSION_CTX_KEY.format(session_id=session_id))
     if not raw:
         return None

@@ -156,9 +156,9 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-04 11:33
+- **最近一次同步时间**：2026-08-04 14:08
 
-- **当前关注的架构焦点**：数据库已从双库（mb_ai_core / mb_ai_cs）合并为单库 `mb_ai_engine`（core_*/cs_* 表名前缀隔离），引入 Alembic 取代 create_all（migrations/ + init_db 基线），测试基建改为 conftest 里 alembic upgrade head 建表（pytest 9/9 通过）；跨领域（core_* ↔ cs_*）不建物理外键，领域内 FK 保留。下次迭代改表流程：改模型 → `alembic revision --autogenerate` → 审阅迁移 → `alembic upgrade head`。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
+- **当前关注的架构焦点**：cs_session_state 生命周期治理已落地——① expires_at 滚动刷新（每次 route = now + session_ttl_seconds，与 Redis TTL 对齐）；② DB 兜底恢复（Redis 状态缺失时 route 前从表恢复 HUMAN_MODE/BLOCKED 并续 TTL，`router._restore_state_from_db`，防止沉默超 TTL 后转人工状态丢失）；③ 清理双通道（route 惰性清理 LIMIT 200 + `scripts/cleanup_sessions.py --dry-run`，保留期 `session_retention_days=30` 天，NULL expires_at 用 updated_at 兜底）；④ GET /session Redis 缺失回退 DB 最后状态。pytest 15/15 通过。另：core_knowledge_items 已加 category 主分类字段（方案 A：VARCHAR(64)+索引+API 筛选，与 tags 扁平标签职责分离）。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。

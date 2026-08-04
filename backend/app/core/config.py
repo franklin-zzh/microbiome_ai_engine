@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # 本项目独占 Redis db3（已核查 db0-15 全部为空，无历史项目占用；db0-2 预留给其他项目）
     redis_url: str = "redis://:fumate@localhost:6380/3"
     session_ttl_seconds: int = 1800          # 会话状态 TTL（默认 30 分钟）
+    session_retention_days: int = 30         # 会话不活跃过期后，状态行再保留天数（之后惰性清理/脚本删除）
     negative_streak_threshold: int = 2       # 连续负面情绪 >= 2 转 HUMAN_MODE
 
     # ============ Dify（共享知识库引擎 engine_rag，未来可拆分为独立服务）============

@@ -50,6 +50,7 @@ def submit_knowledge(
         domain=body.domain,
         source_type=body.source_type,
         status=KnowledgeStatus.PENDING,
+        category=body.category,
         title=body.title,
         question=body.question,
         answer=body.answer,
@@ -166,6 +167,7 @@ def approve_knowledge(
 def list_knowledge(
     domain: str = Query(None, pattern="^(CS|SALES|DOCTOR)$"),
     status: str = Query(None, pattern="^(DRAFT|PENDING|APPROVED|REJECTED)$"),
+    category: str = Query(None, min_length=1, max_length=64),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -175,6 +177,8 @@ def list_knowledge(
         query = query.filter(KnowledgeItem.domain == domain)
     if status:
         query = query.filter(KnowledgeItem.status == status)
+    if category:
+        query = query.filter(KnowledgeItem.category == category)
     total = query.count()
     items = query.order_by(KnowledgeItem.created_at.desc()).offset(skip).limit(limit).all()
     return KnowledgeListResponse(total=total, items=[KnowledgeItemOut.model_validate(i) for i in items])

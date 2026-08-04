@@ -105,3 +105,31 @@ def test_list_knowledge():
     data = response.json()
     assert data["total"] >= 1
     assert len(data["items"]) >= 1
+
+
+def test_submit_with_category_and_filter():
+    # 提交时显式指定主分类
+    submit = client.post("/api/v1/knowledge/submit", json={
+        "domain": "CS",
+        "title": "分类测试 FAQ",
+        "question": "分类测试问题",
+        "answer": "分类测试答案",
+        "tags": ["测试"],
+        "source_type": "MANUAL",
+        "created_by": "pytest",
+        "category": "product.probiotics",
+    })
+    assert submit.status_code == 200
+    assert submit.json()["category"] == "product.probiotics"
+
+    # 未指定 category 时兜底为 GENERAL（test_submit_knowledge 提交的条目）
+    resp = client.get("/api/v1/admin/knowledge?category=GENERAL")
+    assert resp.status_code == 200
+    assert resp.json()["total"] >= 1
+
+    # 按 category 精确筛选
+    resp = client.get("/api/v1/admin/knowledge?category=product.probiotics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+    assert all(i["category"] == "product.probiotics" for i in data["items"])
