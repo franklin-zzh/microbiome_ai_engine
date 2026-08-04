@@ -22,3 +22,5 @@ node_modules/
 .reasonix/
 .vscode/
 .idea/
+# frp 服务端配置（frps.toml / Nginx conf 含真实 token 与服务器信息，不入库）
+frp-client/frp/
