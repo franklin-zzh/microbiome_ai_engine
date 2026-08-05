@@ -151,6 +151,7 @@ curl http://192.168.110.16:5081/v1/datasets/{CS_DATASET_ID} \
 
 | 症状 | 处理 |
 |---|---|
+| postgres 报 `could not write to file ...: Operation not permitted`(EPERM) | RHEL/CentOS 系服务器上通常是 SELinux enforcing 拦容器写 bind 卷:治本 `sudo chcon -Rt container_file_t $BASE/docker/volumes`;快速验证 `sudo setenforce 0` 后重启容器,若正常即 SELinux 问题 |
 | `db/data/pgdata` 属主显示 `avahi`、`redis` 卷属主显示 `polkitd` | 正常:宿主机 uid 70/999 的用户名恰好叫 avahi/polkitd,它们就是 postgres/redis 容器用户(容器内外按 uid 对应)。`pgdata` 权限 700、zzh 进不去也正常,别 chown 它,管理用 sudo |
 | `db_postgres` unhealthy / Permission denied | 数据目录属主问题:更新 compose 后 `init_db` 服务会自动 chown 给 postgres;或手动 `chown -R 70:70 $BASE/docker/volumes/db/data`(postgres:15-alpine 的 postgres uid=70),日志 `docker logs dify-db_postgres-1` |
 | 整个目录 chown 给了宿主用户(如 zzh)后 db 仍失败 | 正常现象:容器内按 uid 校验,zzh(uid 1000)≠ postgres(uid 70),对 zzh 属主的 755 目录 postgres 仍无写权限。外层目录归 zzh 没问题,`db/data` 单独 `chown -R 70:70`(或靠 init_db 每次启动自动修正) |
