@@ -46,24 +46,33 @@ mkdir -p "$BASE/docker/volumes"/{db/data,redis,weaviate,sandbox/{dependencies,co
 cd "$BASE"
 cp .env.dify.example .env.dify
 
-# 生成并替换 SECRET_KEY(必须)
+# ① SECRET_KEY(Dify 主密钥):标准 base64 即可,必须改
 NEW_KEY=$(openssl rand -base64 42)
 sed -i "s|SECRET_KEY=.*|SECRET_KEY=$NEW_KEY|" .env.dify
 
-# 建议同时修改:REDIS_PASSWORD / DB_PASSWORD / WEAVIATE_API_KEY /
-# SANDBOX_API_KEY / PLUGIN_DAEMON_KEY / PLUGIN_DIFY_INNER_API_KEY /
-# DIFY_AGENT_SERVER_SECRET_KEY / DIFY_AGENT_API_TOKEN(openssl rand 或手动)
+# ② DIFY_AGENT_SERVER_SECRET_KEY:必须是 base64url(不能含 + / =),
+#    不能直接用 ① 的 openssl rand 结果,否则 agent_backend 启动报
+#    "must be valid unpadded base64url text"
+NEW_AGENT_KEY=$(openssl rand -base64 42 | tr '+/' '-_' | tr -d '=')
+sed -i "s|^DIFY_AGENT_SERVER_SECRET_KEY=.*|DIFY_AGENT_SERVER_SECRET_KEY=$NEW_AGENT_KEY|" .env.dify
+
+# 其他密钥建议一并修改(openssl rand -base64 42 即可):
+#   REDIS_PASSWORD / DB_PASSWORD / WEAVIATE_API_KEY / PLUGIN_DAEMON_KEY /
+#   PLUGIN_DIFY_INNER_API_KEY / DIFY_AGENT_API_TOKEN
+# 注意:改 SANDBOX_API_KEY 时,要同步改 dify-config/sandbox/conf/config.yaml 的 app.key
 ```
 
 确认 `.env.dify` 中关键项:
 
 ```bash
-grep -E 'SERVER_IP|WEB_PORT|API_PORT|DIFY_DATA_ROOT|SECRET_KEY' .env.dify
+grep -E 'SERVER_IP|WEB_PORT|API_PORT|DIFY_DATA_ROOT|SECRET_KEY|DIFY_AGENT_SERVER_SECRET_KEY' .env.dify
 # 期望:
 #   SERVER_IP=192.168.110.16
 #   WEB_PORT=3080
 #   API_PORT=5081  
 #   DIFY_DATA_ROOT=/data/data2025/fmt_software/fmt-infra/dify/docker/volumes
+#   SECRET_KEY=<openssl rand 长串>
+#   DIFY_AGENT_SERVER_SECRET_KEY=<base64url 串,不含 + / =>
 ```
 
 ## 5. 上传文件(本地开发机执行)
