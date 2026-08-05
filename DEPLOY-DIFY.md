@@ -60,7 +60,7 @@ grep -E 'SERVER_IP|WEB_PORT|API_PORT|DIFY_DATA_ROOT|SECRET_KEY' .env.dify
 # 期望:
 #   SERVER_IP=192.168.110.16
 #   WEB_PORT=3080
-#   API_PORT=5081
+#   API_PORT=5081  
 #   DIFY_DATA_ROOT=/data/data2025/fmt_software/fmt-infra/dify/docker/volumes
 ```
 
