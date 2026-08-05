@@ -38,6 +38,8 @@ BASE=/data/data2025/fmt_software/fmt-infra/dify
 mkdir -p "$BASE/docker/volumes"/{db/data,redis,weaviate,sandbox/{dependencies,conf},plugin_daemon,app/storage}
 ```
 
+> sandbox 需要预置配置 `config.yaml`(仓库 `dify-config/sandbox/conf/config.yaml`),否则容器启动即崩(`failed to init config`),见第 5/6 节复制。
+
 ## 4. 生成 .env.dify
 
 ```bash
@@ -70,12 +72,18 @@ grep -E 'SERVER_IP|WEB_PORT|API_PORT|DIFY_DATA_ROOT|SECRET_KEY' .env.dify
 # 在本地仓库根目录执行;把 <用户> 换成服务器登录用户名
 scp -i ~/.ssh/<你的密钥> docker-compose.dify.yml .env.dify.example \
     <用户>@192.168.110.16:/data/data2025/fmt_software/fmt-infra/dify/
+scp -i ~/.ssh/<你的密钥> -r dify-config \
+    <用户>@192.168.110.16:/data/data2025/fmt_software/fmt-infra/dify/
 ```
 
 ## 6. 启动
 
 ```bash
 cd /data/data2025/fmt_software/fmt-infra/dify
+
+# 复制 sandbox 预置配置(必需,否则 sandbox 启动即崩)
+cp dify-config/sandbox/conf/config.yaml docker/volumes/sandbox/conf/config.yaml
+
 docker compose -f docker-compose.dify.yml --env-file .env.dify up -d
 
 # 观察启动进度(首次拉镜像约 10-20 分钟)
@@ -151,6 +159,7 @@ curl http://192.168.110.16:5081/v1/datasets/{CS_DATASET_ID} \
 
 | 症状 | 处理 |
 |---|---|
+| sandbox 崩溃 `failed to init config: open conf/config.yaml: no such file or directory` | 缺预置配置:把仓库 `dify-config/sandbox/conf/config.yaml` 复制到 `$BASE/docker/volumes/sandbox/conf/` 后重启 |
 | CentOS7 老内核(3.10)上 postgres initdb 报 `could not write to file "postmaster.pid"/"pg_wal/xlogtemp.*": Operation not permitted` | Docker 默认 seccomp profile 在老内核拦 alpine/musl 的 syscall。已内置修复:db_postgres/init_db 改用 Debian 版 `postgres:15` + `security_opt: seccomp=unconfined`,一份 compose 兼容 CentOS7 与 Ubuntu22.04 |
 | postgres 报 `could not write to file ...: Operation not permitted`(EPERM) | RHEL/CentOS 系服务器上通常是 SELinux enforcing 拦容器写 bind 卷:治本 `sudo chcon -Rt container_file_t $BASE/docker/volumes`;快速验证 `sudo setenforce 0` 后重启容器,若正常即 SELinux 问题 |
 | `db/data/pgdata` 属主显示 `avahi`、`redis` 卷属主显示 `polkitd` | 正常:宿主机 uid 70/999 的用户名恰好叫 avahi/polkitd,它们就是 postgres/redis 容器用户(容器内外按 uid 对应)。`pgdata` 权限 700、zzh 进不去也正常,别 chown 它,管理用 sudo |

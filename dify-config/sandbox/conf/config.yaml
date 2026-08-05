@@ -1,0 +1,16 @@
+# Dify sandbox 配置(官方 1.16.1 版本,复制到部署目录 docker/volumes/sandbox/conf/config.yaml)
+# 注意:enable_network 已按内网部署改为 False(与 compose 的 ENABLE_NETWORK=false 一致,避免 SSRF);
+# app.key 需与 compose 的 SANDBOX_API_KEY 保持一致(默认 dify-sandbox,改 .env.dify 时同步改这里)
+app:
+  port: 8194
+  debug: True
+  key: dify-sandbox
+max_workers: 4
+max_requests: 50
+worker_timeout: 5
+enable_network: False # please make sure there is no network risk in your environment
+allowed_syscalls: # please leave it empty if you have no idea how seccomp works
+proxy:
+  socks5: ''
+  http: ''
+  https: ''
