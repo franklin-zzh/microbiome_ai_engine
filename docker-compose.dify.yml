@@ -32,7 +32,7 @@ services:
 
   # 初始化 db 数据目录属主（postgres 用户），避免宿主 root 创建的目录导致 postgres 无法写入
   init_db:
-    image: postgres:15-alpine
+    image: postgres:15   # Debian 变体(glibc),兼容 CentOS7 老内核与 Ubuntu 22.04
     command: ["chown", "-R", "postgres:postgres", "/var/lib/postgresql/data"]
     volumes:
       - ${DIFY_DATA_ROOT:-./docker/volumes}/db/data:/var/lib/postgresql/data
@@ -40,8 +40,12 @@ services:
 
   # The PostgreSQL database (Dify 元数据库，仅容器内网)
   db_postgres:
-    image: postgres:15-alpine
+    image: postgres:15   # Debian 变体(glibc),兼容 CentOS7 老内核与 Ubuntu 22.04
     restart: always
+    # 老内核(CentOS7/3.10)+ Docker 默认 seccomp profile 会拦 postgres initdb 写
+    # pg_wal/postmaster.pid(报 Operation not permitted);局域网内网部署风险可控
+    security_opt:
+      - seccomp=unconfined
     deploy:
       resources:
         limits:
