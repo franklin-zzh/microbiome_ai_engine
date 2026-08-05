@@ -151,7 +151,9 @@ curl http://192.168.110.16:5081/v1/datasets/{CS_DATASET_ID} \
 
 | 症状 | 处理 |
 |---|---|
+| `db/data/pgdata` 属主显示 `avahi`、`redis` 卷属主显示 `polkitd` | 正常:宿主机 uid 70/999 的用户名恰好叫 avahi/polkitd,它们就是 postgres/redis 容器用户(容器内外按 uid 对应)。`pgdata` 权限 700、zzh 进不去也正常,别 chown 它,管理用 sudo |
 | `db_postgres` unhealthy / Permission denied | 数据目录属主问题:更新 compose 后 `init_db` 服务会自动 chown 给 postgres;或手动 `chown -R 70:70 $BASE/docker/volumes/db/data`(postgres:15-alpine 的 postgres uid=70),日志 `docker logs dify-db_postgres-1` |
+| 整个目录 chown 给了宿主用户(如 zzh)后 db 仍失败 | 正常现象:容器内按 uid 校验,zzh(uid 1000)≠ postgres(uid 70),对 zzh 属主的 755 目录 postgres 仍无写权限。外层目录归 zzh 没问题,`db/data` 单独 `chown -R 70:70`(或靠 init_db 每次启动自动修正) |
 | redis/weaviate 等报权限错误 | 同样思路 chown 对应卷目录(redis 用户 uid 999,weaviate 默认 root);更新 compose 后已由启动流程处理 |
 | 3080/5081 被占用 | 改 `.env.dify` 的 `WEB_PORT` / `API_PORT`,重启 |
 | 控制台能开但 API 报 localhost | `.env.dify` 的 `CONSOLE_API_URL`/`APP_API_URL` 必须是 `http://192.168.110.16:5081`(不是 localhost),改后 `up -d` 重建 web |
