@@ -50,10 +50,10 @@ cp .env.dify.example .env.dify
 NEW_KEY=$(openssl rand -base64 42)
 sed -i "s|SECRET_KEY=.*|SECRET_KEY=$NEW_KEY|" .env.dify
 
-# ② DIFY_AGENT_SERVER_SECRET_KEY:必须是 base64url(不能含 + / =),
-#    不能直接用 ① 的 openssl rand 结果,否则 agent_backend 启动报
-#    "must be valid unpadded base64url text"
-NEW_AGENT_KEY=$(openssl rand -base64 42 | tr '+/' '-_' | tr -d '=')
+# ② DIFY_AGENT_SERVER_SECRET_KEY:必须 base64url 且解码后恰好 32 字节,
+#    不能用 ① 的 openssl rand -base64 42(42 字节),否则 agent_backend 报
+#    "must decode to exactly 32 decoded bytes"
+NEW_AGENT_KEY=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
 sed -i "s|^DIFY_AGENT_SERVER_SECRET_KEY=.*|DIFY_AGENT_SERVER_SECRET_KEY=$NEW_AGENT_KEY|" .env.dify
 
 # 其他密钥建议一并修改(openssl rand -base64 42 即可):
