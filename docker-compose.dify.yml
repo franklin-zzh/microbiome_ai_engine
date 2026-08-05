@@ -141,6 +141,12 @@ services:
       DB_USERNAME: ${DB_USERNAME:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-difyai123456}
       DB_SSL_MODE: disable
+      # plugin_daemon 需要连接 Redis(官方配置,之前遗漏导致 dial tcp :0 崩溃)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USERNAME: ""
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-difyai123456}
+      REDIS_DB: 0
       SERVER_PORT: 5002
       SERVER_KEY: ${PLUGIN_DAEMON_KEY:-lYkiYYT6owG+71oLerGzA7GXCgOT++6ovaezWAjpCjf+Sjc3ZtU+qUEi}
       MAX_PLUGIN_PACKAGE_SIZE: 52428800
@@ -164,6 +170,8 @@ services:
       - ${DIFY_DATA_ROOT:-./docker/volumes}/plugin_daemon:/app/storage
     depends_on:
       db_postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   # Dify Agent backend service
