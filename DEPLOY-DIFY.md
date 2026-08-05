@@ -4,6 +4,8 @@
 数据卷统一落在 `/data/data2025/fmt_software/fmt-infra/dify/docker/volumes`(磁盘空间充足分区)。
 backend(FastAPI)继续留在本地开发机,通过局域网连服务器 Dify。
 
+Dify 各服务运行在自定义内部网络 **`fmt-dify-network`**(attachable:未来其他容器/compose 可 `docker network connect` 或 `external` 引用加入,直接以服务名互访)。
+
 ---
 
 ## 1. 文件清单
