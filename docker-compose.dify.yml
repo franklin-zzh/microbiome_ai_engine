@@ -30,6 +30,14 @@ services:
       - ${DIFY_DATA_ROOT:-./docker/volumes}/app/storage:/app/api/storage
     restart: "no"
 
+  # 初始化 db 数据目录属主（postgres 用户），避免宿主 root 创建的目录导致 postgres 无法写入
+  init_db:
+    image: postgres:15-alpine
+    command: ["chown", "-R", "postgres:postgres", "/var/lib/postgresql/data"]
+    volumes:
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/db/data:/var/lib/postgresql/data
+    restart: "no"
+
   # The PostgreSQL database (Dify 元数据库，仅容器内网)
   db_postgres:
     image: postgres:15-alpine
@@ -38,6 +46,9 @@ services:
       resources:
         limits:
           memory: 512m
+    depends_on:
+      init_db:
+        condition: service_completed_successfully
     environment:
       POSTGRES_USER: ${DB_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-difyai123456}

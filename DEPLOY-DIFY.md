@@ -151,6 +151,8 @@ curl http://192.168.110.16:5081/v1/datasets/{CS_DATASET_ID} \
 
 | 症状 | 处理 |
 |---|---|
+| `db_postgres` unhealthy / Permission denied | 数据目录属主问题:更新 compose 后 `init_db` 服务会自动 chown 给 postgres;或手动 `chown -R 70:70 $BASE/docker/volumes/db/data`(postgres:15-alpine 的 postgres uid=70),日志 `docker logs dify-db_postgres-1` |
+| redis/weaviate 等报权限错误 | 同样思路 chown 对应卷目录(redis 用户 uid 999,weaviate 默认 root);更新 compose 后已由启动流程处理 |
 | 3080/5081 被占用 | 改 `.env.dify` 的 `WEB_PORT` / `API_PORT`,重启 |
 | 控制台能开但 API 报 localhost | `.env.dify` 的 `CONSOLE_API_URL`/`APP_API_URL` 必须是 `http://192.168.110.16:5081`(不是 localhost),改后 `up -d` 重建 web |
 | 数据没落在 /data | 检查 `DIFY_DATA_ROOT` 是否为绝对路径且目录已建 |
