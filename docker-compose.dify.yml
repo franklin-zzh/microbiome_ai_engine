@@ -1,12 +1,13 @@
 # ============================================================
 # Dify 私有化部署（本地开发集）· 官方镜像 1.16.1
-# 用法：docker compose -f docker-compose.dify.yml up -d
-# 控制台：http://localhost:3000    API：http://localhost:5001
+# 用法：docker compose -f docker-compose.dify.yml --env-file .env.dify up -d
+# 控制台：http://<服务器IP>:3080    API：http://<服务器IP>:5081
 # 注意：
 #   - 生产环境请使用 Dify 官方仓库完整 compose（含 nginx/ssrf_proxy/certbot）
+#   - 对外仅暴露 web(3080) 与 api(5081) 两个端口，其余服务只走容器内网
+#   - 数据卷统一挂载到 ${DIFY_DATA_ROOT}（默认 ./docker/volumes）
 #   - SECRET_KEY 请改为 `openssl rand -base64 42` 生成的值
-#   - 端口已避开宿主已有容器：db_postgres 5434（宿主 postgresql-16 占 5433）、
-#     redis 6381（宿主 redis 占 6380）；Dify 内部仍走容器网络 5432/6379
+#   - Redis 由本 compose 自带的 redis 服务提供（Dify 独占 db4）
 # ============================================================
 
 services:
@@ -25,10 +26,10 @@ services:
         chown -R 1001:1001 /app/api/storage && touch "$${FLAG_FILE}"
         echo "Permissions initialized. Exiting."
     volumes:
-      - ./docker/volumes/app/storage:/app/api/storage
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/app/storage:/app/api/storage
     restart: "no"
 
-  # The PostgreSQL database (Dify 元数据库，宿主端口 5434 避开宿主 postgresql-16 的 5433)
+  # The PostgreSQL database (Dify 元数据库，仅容器内网)
   db_postgres:
     image: postgres:15-alpine
     restart: always
@@ -38,28 +39,22 @@ services:
       POSTGRES_DB: ${DB_DATABASE:-dify}
       PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
     volumes:
-      - ./docker/volumes/db/data:/var/lib/postgresql/data
-    ports:
-      - "${DB_PORT:-5434}:5432"
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/db/data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "db_postgres", "-U", "${DB_USERNAME:-postgres}", "-d", "${DB_DATABASE:-dify}"]
       interval: 5s
       timeout: 3s
       retries: 30
 
-  # The redis cache (Dify 专用，宿主端口 6381 避开宿主 redis 的 6380)
+  # Redis（Dify 独占 db4，仅容器内网）
   redis:
-    image: redis:6-alpine
+    image: redis:7-alpine
     restart: always
-    environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD:-difyai123456}
-    command: redis-server --requirepass ${REDIS_PASSWORD:-difyai123456}
+    command: redis-server --requirepass ${REDIS_PASSWORD:-difyai123456} --appendonly yes
     volumes:
-      - ./docker/volumes/redis/data:/data
-    ports:
-      - "${REDIS_PORT:-6381}:6379"
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/redis:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-difyai123456} ping | grep -q PONG"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-difyai123456}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -69,7 +64,7 @@ services:
     image: semitechnologies/weaviate:1.19.0
     restart: always
     volumes:
-      - ./docker/volumes/weaviate:/var/lib/weaviate
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/weaviate:/var/lib/weaviate
     environment:
       PERSISTENCE_DATA_PATH: /var/lib/weaviate
       QUERY_DEFAULTS_LIMIT: 25
@@ -81,8 +76,6 @@ services:
       AUTHENTICATION_APIKEY_USERS: ${WEAVIATE_API_KEY_USERS:-hello@dify.ai}
       AUTHORIZATION_ADMINLIST_ENABLED: "true"
       AUTHORIZATION_ADMINLIST_USERS: ${WEAVIATE_API_KEY_USERS:-hello@dify.ai}
-    ports:
-      - "${WEAVIATE_PORT:-8080}:8080"
 
   # The DifySandbox
   sandbox:
@@ -96,8 +89,8 @@ services:
       ENABLE_NETWORK: "false"
       SANDBOX_PORT: 8194
     volumes:
-      - ./docker/volumes/sandbox/dependencies:/dependencies
-      - ./docker/volumes/sandbox/conf:/conf
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/sandbox/dependencies:/dependencies
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/sandbox/conf:/conf
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8194/health"]
 
@@ -131,22 +124,18 @@ services:
       PLUGIN_INSTALLED_PATH: plugin
       PLUGIN_PACKAGE_CACHE_PATH: plugin_packages
       PLUGIN_MEDIA_CACHE_PATH: assets
-    ports:
-      - "5003:5003"
     volumes:
-      - ./docker/volumes/plugin_daemon:/app/storage
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/plugin_daemon:/app/storage
     depends_on:
       db_postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
 
   # Dify Agent backend service
   agent_backend:
     image: langgenius/dify-agent-backend:1.16.1
     restart: always
     environment:
-      DIFY_AGENT_REDIS_URL: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/2
+      DIFY_AGENT_REDIS_URL: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/4
       DIFY_AGENT_REDIS_PREFIX: dify-agent
       DIFY_AGENT_PLUGIN_DAEMON_URL: http://plugin_daemon:5002
       DIFY_AGENT_PLUGIN_DAEMON_API_KEY: ${PLUGIN_DAEMON_KEY:-lYkiYYT6owG+71oLerGzA7GXCgOT++6ovaezWAjpCjf+Sjc3ZtU+qUEi}
@@ -158,13 +147,11 @@ services:
       DIFY_AGENT_API_TOKEN: ${DIFY_AGENT_API_TOKEN:-dify-agent-run-token-for-dev-only}
       DIFY_AGENT_SHUTDOWN_GRACE_SECONDS: 30
       DIFY_AGENT_RUN_RETENTION_SECONDS: 259200
-    ports:
-      - "5050:5050"
     depends_on:
-      redis:
-        condition: service_started
       plugin_daemon:
         condition: service_started
+      redis:
+        condition: service_healthy
 
   # Local sandbox for Dify Agent shell workspaces
   local_sandbox:
@@ -173,8 +160,6 @@ services:
     environment:
       - SHELLCTL_AUTH_TOKEN=${DIFY_AGENT_SHELLCTL_AUTH_TOKEN:-}
       - NO_PROXY=localhost,127.0.0.1
-    ports:
-      - "5004:5004"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5004/healthz"]
       interval: 30s
@@ -197,8 +182,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-difyai123456}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/1
-      CELERY_BACKEND: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/4
+      CELERY_BACKEND: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/4
       VECTOR_STORE: weaviate
       WEAVIATE_ENDPOINT: http://weaviate:8080
       WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:-WVF5YThaHlkYwhGUSmCRgsX3tD5ngdN8pkih}
@@ -216,13 +201,13 @@ services:
       db_postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       agent_backend:
         condition: service_started
     volumes:
-      - ./docker/volumes/app/storage:/app/api/storage
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/app/storage:/app/api/storage
     ports:
-      - "5001:5001"
+      - "${API_PORT:-5081}:5001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
@@ -245,8 +230,8 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-difyai123456}
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/1
-      CELERY_BACKEND: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/4
+      CELERY_BACKEND: redis://:${REDIS_PASSWORD:-difyai123456}@redis:6379/4
       VECTOR_STORE: weaviate
       WEAVIATE_ENDPOINT: http://weaviate:8080
       WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:-WVF5YThaHlkYwhGUSmCRgsX3tD5ngdN8pkih}
@@ -264,11 +249,11 @@ services:
       db_postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       agent_backend:
         condition: service_started
     volumes:
-      - ./docker/volumes/app/storage:/app/api/storage
+      - ${DIFY_DATA_ROOT:-./docker/volumes}/app/storage:/app/api/storage
 
   # Frontend web application
   web:
@@ -282,6 +267,6 @@ services:
       TEXT_GENERATION_TIMEOUT_MS: 60000
       WORKFLOW_GENERATION_TIMEOUT_MS: 180000
     ports:
-      - "3000:3000"
+      - "${WEB_PORT:-3080}:3000"
     depends_on:
       - api

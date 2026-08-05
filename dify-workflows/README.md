@@ -6,7 +6,7 @@
 - 在 Dify 中创建两个 Knowledge（Dataset）：
   - `CS_KB`：客服 Q&A 话术库
   - `Sales_KB`：销售话术/案例库
-- 记录两个 Dataset 的 ID，填入 `backend/.env` 的 `CS_DATASET_ID` 和 `SALES_DATASET_ID`。
+- 记录两个 Dataset 的 ID，填入根目录 `.env` 的 `CS_DATASET_ID` 和 `SALES_DATASET_ID`。
 - 后端服务已启动：`http://localhost:8000`
 
 ## 2. 导入工作流

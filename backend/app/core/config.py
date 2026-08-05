@@ -1,12 +1,16 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 统一读取项目根目录 .env（无论从哪个目录启动 backend 都生效）
+ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ROOT_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )

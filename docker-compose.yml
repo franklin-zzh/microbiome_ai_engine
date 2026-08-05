@@ -22,6 +22,10 @@ services:
       - DIFY_API_KEY=${DIFY_API_KEY}
       - CS_DATASET_ID=${CS_DATASET_ID}
       - SALES_DATASET_ID=${SALES_DATASET_ID}
+      - WXKF_CORP_ID=${WXKF_CORP_ID}
+      - WXKF_SECRET=${WXKF_SECRET}
+      - WXKF_TOKEN=${WXKF_TOKEN}
+      - WXKF_ENCODING_AES_KEY=${WXKF_ENCODING_AES_KEY}
       - APP_NAME=agent_cs
       - DEBUG=${DEBUG:-true}
     volumes:

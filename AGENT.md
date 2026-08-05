@@ -20,7 +20,7 @@
 当你编写、重构或调试代码时，必须严格遵守以下技术规范：
 
 - **核心语言/框架**：Python 3.11+ (FastAPI) + Pydantic v2 + SQLAlchemy 2.x
-- **Agent & RAG 引擎**：Dify (Docker 私有化部署，当前官方版本 `1.16.1`) + Embedding/LLM 自配 API Key
+- **Agent & RAG 引擎**：Dify `1.16.1` 私有化部署于局域网服务器 `192.168.110.16`（控制台 `http://192.168.110.16:3080` / API `http://192.168.110.16:5081`，数据卷 `/data/data2025/fmt_software/fmt-infra/dify/docker/volumes`，见 `DEPLOY-DIFY.md`）+ Embedding/LLM 自配 API Key
 - **缓存与队列**：Redis（本地 Docker `redis` 容器，`6380` 端口，密码 `fumate`，**本项目独占 db3**；会话状态机、5 秒异步回包上下文缓存；Celery 队列于第 3 周引入）
 - **数据存储**：**MySQL 8 单库 `mb_ai_engine`**（本地 Docker `global-mysql8` 容器，`3306` 端口，root/fumate）：
     - 领域隔离靠表名前缀：`core_*` 知识库体系（core_knowledge_items / core_unanswered_questions / core_sales_cases）+ `cs_*` 客服会话体系（cs_chat_logs / cs_session_state / cs_leads_preview）
@@ -30,7 +30,7 @@
 - **环境限制**：Windows 11 + Docker Desktop (WSL2) 开发环境，部署目标为 Linux Docker 容器
 
 > **存储选型说明（2026-08-03 定稿修订）**：业务方要求沿用 MySQL（向量库由 Dify/单独承担，而非 PostgreSQL）。
-> 业务数据 100% 走 MySQL 8 单库 `mb_ai_engine`；Dify 官方架构自带的 `db_postgres` 仅作为 Dify 元数据库（宿主端口 5434），不承担任何业务/向量职责。
+> 业务数据 100% 走 MySQL 8 单库 `mb_ai_engine`；Dify 官方架构自带的 `db_postgres` 仅作为 Dify 元数据库（仅容器内网，不映射宿主端口），不承担任何业务/向量职责。
 > 表 `chat_logs` 已更名为 `cs_chat_logs`；双库（mb_ai_core / mb_ai_cs）已于 2026-08-04 合并为单库 `mb_ai_engine`（表前缀隔离，见 scripts/migrate_single_db.py）。
 
 ## 3. 架构设计与核心规则 (Architecture & Rules)
@@ -67,7 +67,7 @@ H5 官网聊天窗  ─┘        │                                           
 
 4. **密钥与凭证安全**：
     - 禁止在代码 / Dockerfile / Dify DSL 中硬编码任何 API Key、DB 密码、EncodingAESKey、Dataset Token。
-    - 统一走 `.env`（根目录 + backend/），运行时经 `pydantic-settings` 加载；`restricted_paths` 保护 `.env` / `.pem`。
+    - 统一走根目录 `.env`（docker compose 插值 + backend `pydantic-settings` 读取），运行时经 `pydantic-settings` 加载；`restricted_paths` 保护 `.env` / `.pem`。
 
 5. **轻量与高扩展设计**：遵循 MVP 最小可行原则，避免过度设计（例如不引入 Milvus 集群、第一周不引入 Celery）。接口 RESTful，核心业务逻辑在 Service 层消化。
 
@@ -79,7 +79,9 @@ H5 官网聊天窗  ─┘        │                                           
 D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-health-agent-platform/ 迁移至此；项目名 agent_cs）
 ├── AGENT.md                      # 本文件（AI 核心索引与全局大纲）
 ├── docker-compose.yml            # 网关栈：FastAPI backend（MySQL/Redis 复用宿主容器）
-├── docker-compose.dify.yml       # Dify 私有化部署（官方镜像 1.16.1，本地开发集）
+├── docker-compose.dify.yml       # Dify 私有化部署（官方镜像 1.16.1，对外仅 web:3080 / api:5081）
+├── .env.dify.example             # Dify 部署环境变量模板（复制为 .env.dify 使用）
+├── DEPLOY-DIFY.md                # Dify 局域网服务器部署手册（部署到 192.168.110.16）
 ├── backend/                      # FastAPI 网关服务
 │   ├── app/
 │   │   ├── core/                 # 公共基础设施：config / database(单引擎+单Base) / redis / wxbizmsgcrypt / logging
@@ -141,7 +143,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 - **初始化 MySQL 单库**：`cd backend && .venv\Scripts\python.exe scripts\setup_db.py`（建 mb_ai_engine / mb_ai_engine_test）
 - **双库 → 单库数据迁移（仅旧环境执行一次）**：`cd backend && .venv\Scripts\python.exe scripts\migrate_single_db.py`（RENAME TABLE 跨库搬表 + 索引改名），随后 `alembic stamp head`
 - **应用表结构迁移**：`cd backend && $env:DATABASE_URL="mysql+pymysql://root:fumate@localhost:3306/mb_ai_engine?charset=utf8mb4"; .venv\Scripts\python.exe -m alembic upgrade head`（docker compose 启动时自动执行）
-- **启动 Dify 私有化**：`docker compose -f docker-compose.dify.yml up -d`（首次拉镜像约需 10-20 分钟）
+- **启动 Dify 私有化（服务器 192.168.110.16）**：`docker compose -f docker-compose.dify.yml --env-file .env.dify up -d`（对外端口 web:3080 / api:5081，完整步骤见 `DEPLOY-DIFY.md`）
 - **查看服务日志**：`docker compose logs -f backend`
 
 ### 🧪 自动化测试 (Testing)
