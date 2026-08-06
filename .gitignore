@@ -1,6 +1,7 @@
 .env
 .env.local
 .env.dify
+.env.dify.official
 __pycache__/
 *.pyc
 *.pyo

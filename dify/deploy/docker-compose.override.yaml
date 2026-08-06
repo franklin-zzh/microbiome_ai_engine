@@ -1,0 +1,93 @@
+services:
+  db_postgres:
+    image: postgres:15          # Debian 变体(glibc)：uid 999 与旧数据属主一致；兼容 CentOS7 老内核
+    security_opt:
+      - seccomp=unconfined      # 老内核(3.10)下 postgres 写 pg_wal 报 Operation not permitted 的修复；内网部署风险可控
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  api:
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  api_websocket:
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  worker:
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  worker_beat:
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  web:
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  nginx:
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  weaviate:
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  sandbox:
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  plugin_daemon:
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  agent_backend:
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  local_sandbox:
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  ssrf_proxy:
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  agent_ssrf_proxy:
+    deploy:
+      resources:
+        limits:
+          memory: 256m

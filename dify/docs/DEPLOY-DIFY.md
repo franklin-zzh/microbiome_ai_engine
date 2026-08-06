@@ -1,5 +1,11 @@
 # Dify 局域网服务器部署手册（192.168.110.16）
 
+> ⚠️ **本文件描述的是旧自定义 compose 方案（已弃用，仅作参考/回滚备份）。**
+> 该方案曾因 api 环境漏配 `PLUGIN_DAEMON_URL`/`PLUGIN_DAEMON_KEY` 导致模型供应商页
+> 400（`Failed to request plugin daemon`），且需手工维护 CORS 白名单。
+> **新部署/切换请走官方方案：见 [OFFICIAL-DEPLOY-DIFY.md](OFFICIAL-DEPLOY-DIFY.md)**。
+> 下文保留原样，仅用于回滚时参考。
+
 目标:把 Dify 1.16.1 部署到局域网服务器,对外只暴露 **web 控制台 `3080`** 与 **API `5081`** 两个端口,
 数据卷统一落在 `/data/data2025/fmt_software/fmt-infra/dify/docker/volumes`(磁盘空间充足分区)。
 backend(FastAPI)继续留在本地开发机,通过局域网连服务器 Dify。
@@ -60,6 +66,10 @@ sed -i "s|^DIFY_AGENT_SERVER_SECRET_KEY=.*|DIFY_AGENT_SERVER_SECRET_KEY=$NEW_AGE
 #   REDIS_PASSWORD / DB_PASSWORD / WEAVIATE_API_KEY / PLUGIN_DAEMON_KEY /
 #   PLUGIN_DIFY_INNER_API_KEY / DIFY_AGENT_API_TOKEN
 # 注意:改 SANDBOX_API_KEY 时,要同步改 dify-config/sandbox/conf/config.yaml 的 app.key
+
+# ③ 控制台 CORS 白名单(必须配!本 compose 无 nginx 反代,浏览器页面直连 api(5081)
+#    属跨域;默认白名单只有 127.0.0.1:3000,不改则浏览器报 CORS 错误、前端 500)
+sed -i "s|^CONSOLE_CORS_ALLOW_ORIGINS=.*|CONSOLE_CORS_ALLOW_ORIGINS=http://${SERVER_IP}:${WEB_PORT},http://127.0.0.1:3000,http://localhost:3000|" .env.dify
 ```
 
 确认 `.env.dify` 中关键项:
@@ -177,6 +187,8 @@ curl http://192.168.110.16:5081/v1/datasets/{CS_DATASET_ID} \
 | redis/weaviate 等报权限错误 | 同样思路 chown 对应卷目录(redis 用户 uid 999,weaviate 默认 root);更新 compose 后已由启动流程处理 |
 | 3080/5081 被占用 | 改 `.env.dify` 的 `WEB_PORT` / `API_PORT`,重启 |
 | 控制台能开但 API 报 localhost | `.env.dify` 的 `CONSOLE_API_URL`/`APP_API_URL` 必须是 `http://192.168.110.16:5081`(不是 localhost),改后 `up -d` 重建 web |
+| 浏览器报 CORS 错误(OPTIONS 200 但无 Access-Control-Allow-Origin;服务器 curl 正常) | 本 compose 无 nginx,浏览器直连 api 属跨域:`.env.dify` 的 `CONSOLE_CORS_ALLOW_ORIGINS` 必须包含 `http://<服务器IP>:<WEB_PORT>`,改后 `docker compose up -d api` 重建 |
+| 登录/接口报 500,api 日志 `relation "dify_setups" does not exist` | 数据库表缺失(常见于 `docker compose down -v` 清库后未迁移):`docker compose exec api flask db upgrade`,重启 api 后 setup 接口应返回 `{"step":"not_started"}` |
 | 数据没落在 /data | 检查 `DIFY_DATA_ROOT` 是否为绝对路径且目录已建 |
 | 工作流回调失败(502/超时) | 本地开发机是否开机?防火墙是否放行 8000?`BACKEND_BASE_URL` 是否已改为开发机局域网 IP? |
 | 容器权限报错(storage) | `init_permissions` 会 chown 1001:1001;若失败手动 `chown -R 1001:1001 $BASE/docker/volumes/app/storage` |
