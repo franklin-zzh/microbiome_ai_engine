@@ -299,6 +299,8 @@ async def handle_wechat_message(
     raw = await request.body()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty body")
+    if len(raw) > 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Body too large")
     try:
         root = ET.fromstring(raw)
         encrypt = root.findtext("Encrypt") or ""
@@ -307,12 +309,12 @@ async def handle_wechat_message(
     if not encrypt:
         raise HTTPException(status_code=400, detail="Missing Encrypt field")
 
-    crypt = WXBizMsgCrypt(
-        token=settings.wxkf_token,
-        encoding_aes_key=settings.wxkf_encoding_aes_key,
-        receive_id=settings.wxkf_corp_id,
-    )
     try:
+        crypt = WXBizMsgCrypt(
+            token=settings.wxkf_token,
+            encoding_aes_key=settings.wxkf_encoding_aes_key,
+            receive_id=settings.wxkf_corp_id,
+        )
         # 验签失败抛 ValueError；解密后是内层明文 XML（含 FromUserName/Content 等）
         plain_xml = crypt.decrypt_msg(msg_signature, timestamp, nonce, encrypt)
         msg_root = ET.fromstring(plain_xml)

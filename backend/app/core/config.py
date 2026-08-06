@@ -78,6 +78,12 @@ class Settings(BaseSettings):
                 "缺少必填配置项（请复制 .env.example 为项目根目录 .env 并填入真实值）: "
                 + ", ".join(missing)
             )
+        if len(self.jwt_secret) < 32:
+            raise ValueError(
+                "JWT_SECRET 长度不足 32 字符（生成: python -c \"import secrets; print(secrets.token_urlsafe(48))\"）"
+            )
+        if "*" in [o.strip() for o in self.cors_origins.split(",") if o.strip()]:
+            raise ValueError("CORS_ORIGINS 禁止使用通配符 *（含个人信息的接口不允许任意来源跨域）")
         return self
 
 

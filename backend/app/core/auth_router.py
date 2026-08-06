@@ -29,7 +29,7 @@ class LoginResponse(BaseModel):
 
 @router.post("/login", response_model=LoginResponse)
 def login(body: LoginRequest) -> LoginResponse:
-    ok = hmac.compare_digest(body.username, settings.admin_username) and hmac.compare_digest(
+    ok = hmac.compare_digest(body.username, settings.admin_username) & hmac.compare_digest(
         body.password, settings.admin_password
     )
     if not ok:

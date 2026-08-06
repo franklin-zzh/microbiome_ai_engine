@@ -33,4 +33,5 @@ def redis_health() -> dict:
         client.ping()
         return {"redis": "ok"}
     except Exception as exc:
-        return {"redis": f"error: {exc}"}
+        # 不把异常原文带出去：ConnectionError 等可能包含含密码的 redis:// URL
+        return {"redis": f"error: {type(exc).__name__}"}
