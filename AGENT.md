@@ -65,9 +65,13 @@ H5 官网聊天窗  ─┘        │                                           
     - 会话状态机：`NORMAL / HUMAN_MODE / BLOCKED`（Redis db3 存储，TTL 管理）；用户输入"转人工"或连续负面情绪 → 置 `HUMAN_MODE`，AI 停止抢答。
     - 低置信度捕获：检索匹配分 < 0.65 时异步写入 `unanswered_questions` / 知识待补充清单。
 
-4. **密钥与凭证安全**：
-    - 禁止在代码 / Dockerfile / Dify DSL 中硬编码任何 API Key、DB 密码、EncodingAESKey、Dataset Token。
-    - 统一走根目录 `.env`（docker compose 插值 + backend `pydantic-settings` 读取），运行时经 `pydantic-settings` 加载；`restricted_paths` 保护 `.env` / `.pem`。
+4. **密钥与凭证安全（P0 已落地 2026-08-06）**：
+    - 禁止在代码 / Dockerfile / Dify DSL 中硬编码任何 API Key、DB 密码、EncodingAESKey、Dataset Token；
+    - 统一走根目录 `.env`（docker compose 插值 + backend `pydantic-settings` 读取），运行时经 `pydantic-settings` 加载；`restricted_paths` 保护 `.env` / `.pem`；
+    - **默认凭据拒绝**：`DATABASE_URL / REDIS_URL / JWT_SECRET / ADMIN_USERNAME / ADMIN_PASSWORD / INTERNAL_API_KEY` 缺失即启动失败（`app/core/config.py` 必填校验），compose 一律 `${VAR:?}` 不留默认兜底；
+    - **三层鉴权**：① 人类用户 → JWT（`/api/v1/auth/login`，`app/core/security.py` 的 `require_admin`）；② Dify workflow 回调/内部异步链路 → Header `X-API-Key`（`INTERNAL_API_KEY`，`require_internal_key`）；③ 微信 Webhook → 官方签名验签（WXBizMsgCrypt，POST 回调已验签+解密）；
+    - **CORS 白名单配置注入**（`CORS_ORIGINS` 逗号分隔），禁止 `allow_origins=["*"]`；
+    - frp 客户端真实配置（含 token）gitignore，仓库只留 `frp-client/frpc.toml.example` 模板。
 
 5. **轻量与高扩展设计**：遵循 MVP 最小可行原则，避免过度设计（例如不引入 Milvus 集群、第一周不引入 Celery）。接口 RESTful，核心业务逻辑在 Service 层消化。
 
@@ -84,7 +88,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 ├── DEPLOY-DIFY.md                # Dify 局域网服务器部署手册（部署到 192.168.110.16）
 ├── backend/                      # FastAPI 网关服务
 │   ├── app/
-│   │   ├── core/                 # 公共基础设施：config / database(单引擎+单Base) / redis / wxbizmsgcrypt / logging
+│   │   ├── core/                 # 公共基础设施：config / database(单引擎+单Base) / redis / wxbizmsgcrypt / logging / security(JWT+鉴权依赖) / auth_router(登录)
 │   │   ├── clients/              # 外部服务 Client（dify_client.py：Dify SDK 统一封装）
 │   │   ├── knowledge/            # 知识库域（横切共享，mb_ai_engine.core_*）：models / schemas / services / router
 │   │   ├── agent_cs/             # 客服 Agent 域（mb_ai_engine.cs_*）：models / schemas / services(状态机) / router(含微信回调)
@@ -95,7 +99,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 │   ├── tests/                    # pytest 单元测试（conftest.py 自动指向 mb_ai_engine_test + alembic upgrade head 建表）
 │   └── main.py                   # FastAPI 应用入口（表结构由 Alembic 管理，启动不再 create_all）
 ├── dify-workflows/               # Dify 导出 Workflow DSL (YAML)
-├── frp-client/                   # 内网穿透客户端（本地联调用）
+├── frp-client/                   # 内网穿透客户端（frpc.toml 含 token 不入库；模板 frpc.toml.example）
 └── .agent/
     ├── config.json               # 全局模型行为、安全权限与排除目录配置
     ├── prd.md                    # 产品需求文档（旧版 MVP 底座，知识审核闭环继续复用）
@@ -158,17 +162,18 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-04 14:08
+- **最近一次同步时间**：2026-08-06 15:31
 
-- **当前关注的架构焦点**：cs_session_state 生命周期治理已落地——① expires_at 滚动刷新（每次 route = now + session_ttl_seconds，与 Redis TTL 对齐）；② DB 兜底恢复（Redis 状态缺失时 route 前从表恢复 HUMAN_MODE/BLOCKED 并续 TTL，`router._restore_state_from_db`，防止沉默超 TTL 后转人工状态丢失）；③ 清理双通道（route 惰性清理 LIMIT 200 + `scripts/cleanup_sessions.py --dry-run`，保留期 `session_retention_days=30` 天，NULL expires_at 用 updated_at 兜底）；④ GET /session Redis 缺失回退 DB 最后状态。pytest 15/15 通过。另：core_knowledge_items 已加 category 主分类字段（方案 A：VARCHAR(64)+索引+API 筛选，与 tags 扁平标签职责分离）。下一步重点：第 2 周数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
+- **当前关注的架构焦点**：P0 安全基线已落地（2026-08-06）——① 三层鉴权：人类用户 JWT（`app/core/security.py` + `POST /api/v1/auth/login`，.env 单 admin 账号，payload 带 role 为 R5 多角色留路）+ Dify 回调/内部链路 X-API-Key（`INTERNAL_API_KEY`）+ 微信官方签名验签；② 微信 POST 回调补齐验签+解密+结构化日志（XML body 解析，验签失败 400，5 秒内回 success；落库+入队仍按计划 W3）；③ 默认凭据全部拒绝：config 必填校验（缺 `DATABASE_URL/REDIS_URL/JWT_SECRET/ADMIN_*/INTERNAL_API_KEY` 启动即失败）、网关 compose 与 Dify compose 全部 `${VAR:?}`（36 处）、`.env.dify` 本地已轮换 9 个随机密钥；④ CORS 白名单配置注入（`CORS_ORIGINS`，禁止 *）；⑤ frp token 已轮换（新 token 在 gitignore 的 `frp-client/frpc.toml`，模板 `frpc.toml.example`）——⚠️ 服务器 frps.toml auth.token 待同步。pytest 22/22 通过（新增 test_auth.py 5 例）。下一步：W2 数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。
     - [x] 2. Redis 连接模块 `app/core/redis.py` + 会话状态机 `app/agent_cs/services.py`（db3，由 app/services/session_state.py 迁入）。
     - [x] 3. 微信回调 POST 占位路由（先回 `success` 满足 5 秒约束，异步链路第 3 周接入）。
     - [x] 4. docker-compose.yml 复用宿主 MySQL8/Redis；docker-compose.dify.yml（官方镜像 1.16.1，端口 5434/6381）。
-    - [ ] 5. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
-    - [ ] 6. 第 3 周：企微微信客服消息解密 + 主动推送、Celery 异步队列、frp 内网穿透联调。
-    - [ ] 7. 微信 POST 回调补齐验签/解密/主动推送（当前是计划内空壳，W3 落地）。
-    - [ ] 8. 接通负面情绪计数：`increment_negative_streak` 当前是死代码，"连续负面≥2 转人工"规则未接线（AGENT.md §3.2-3 有定义）。
-    - [ ] 9. 全接口鉴权（医疗产品建议加 token，新功能，需产品决策）。
+    - [x] 5. P0 安全基线：JWT+角色鉴权（require_admin/require_internal_key）、/auth/login、CORS 白名单注入、默认凭据必填（config 校验 + compose `:?`）、微信 POST 验签+解密、frp token 轮换移出 git。pytest 22/22。
+    - [ ] 6. ⚠️ 服务器端 frps.toml auth.token 同步为新 token（本地 frpc.toml 已生成，需与服务端一致后重启 frpc/frps）。
+    - [ ] 7. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
+    - [ ] 8. 第 3 周：企微微信客服消息解密后落库 + 主动推送、Celery 异步队列（回调验签/解密已提前完成）。
+    - [ ] 9. 接通负面情绪计数：`increment_negative_streak` 当前是死代码，"连续负面≥2 转人工"规则未接线（AGENT.md §3.2-3 有定义，P1#7）。
+    - [ ] 10. 知识驳回/删除同步删 Dify 文档 + 对账脚本（P1#6，R2）。

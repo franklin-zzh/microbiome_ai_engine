@@ -1,0 +1,20 @@
+# frpc.toml 模板（真实配置文件不入库，防止 token 泄露进 git 历史）
+# 用法：
+#   1. 复制本文件为 frp-client/frpc.toml（已被 .gitignore 忽略）
+#   2. 生成新 token：python -c "import secrets; print(secrets.token_hex(24))"
+#   3. 将新 token 同时写入本文件 auth.token 与【服务器端】frps.toml 的 auth.token
+#      （frps.toml 在服务器上，配置目录已被 gitignore，不会入库）
+#   4. 重启 frpc 与 frps 使新 token 生效
+serverAddr = "39.97.252.180"
+serverPort = 7001
+
+# 密钥必须与服务端 auth.token 一致（⚠️ 2026-08 之前提交进 git 的旧 token 已视为泄露，必须轮换）
+auth.token = "REPLACE_WITH_NEW_TOKEN"
+
+[[proxies]]
+name = "wechat-kf"
+type = "tcp"
+# 如果你的本地后端直接运行在宿主机（如 Node/Python），用 host.docker.internal；若 frpc 和后端都在同一个 Docker 网络，填后端容器名
+localIP = "host.docker.internal"
+localPort = 8000                  # 本地后端运行的端口
+remotePort = 6001                 # 对应云服务器 Nginx 转发的端口

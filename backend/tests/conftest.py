@@ -12,6 +12,14 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
+# P0 鉴权：测试用安全配置（环境变量优先于 .env，保证无 .env 的 CI 也可运行；
+# 已有真实环境变量时不覆盖）。必须在 import get_settings 之前设置。
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-0123456789abcdef0123456789")
+os.environ.setdefault("ADMIN_USERNAME", "testadmin")
+os.environ.setdefault("ADMIN_PASSWORD", "testpass")
+os.environ.setdefault("INTERNAL_API_KEY", "test-internal-key")
+os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
+
 import pytest
 from alembic import command
 from alembic.config import Config

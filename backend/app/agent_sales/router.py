@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 from app.agent_sales.models import LeadsPreview
 from app.agent_sales.schemas import LeadsPreviewOut
 from app.core.database import get_db
+from app.core.security import require_admin
 
 router = APIRouter(prefix="/chat", tags=["sales"])
 
 
-@router.get("/leads", response_model=list[LeadsPreviewOut])
+@router.get("/leads", response_model=list[LeadsPreviewOut], dependencies=[Depends(require_admin)])
 def list_leads(
     status: str = Query(None, pattern="^(NEW|ASSIGNED|CONVERTED|CLOSED)$"),
     skip: int = Query(0, ge=0),

@@ -4,10 +4,10 @@
 - wechat_router：企微「微信客服」/ 公众号回调入口（5 秒内必须回 success，AI 逻辑异步化）
 """
 from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.logging import structured_log
 from app.core.redis import get_redis
+from app.core.security import require_admin, require_internal_key
 from app.clients.wx.wxbizmsgcrypt import WXBizMsgCrypt
 
 chat_router = APIRouter(prefix="/chat", tags=["chat"])
@@ -34,13 +35,14 @@ settings = get_settings()
 # ============ 对话日志湖 ============
 
 
-@chat_router.post("/logs", response_model=CsChatLogOut)
+@chat_router.post("/logs", response_model=CsChatLogOut, dependencies=[Depends(require_internal_key)])
 def create_cs_chat_log(
     body: CsChatLogCreate,
     db: Session = Depends(get_db),
 ):
     """写入一条全量对话日志（Data Lake 闭环入口）
 
+    仅内部异步任务可写（X-API-Key，INTERNAL_API_KEY）。
     第 5 周 Task 5.1 之后由异步任务自动调用；当前先提供显式 API 便于联调。
     """
     record = CsChatLog(
@@ -73,7 +75,7 @@ def create_cs_chat_log(
     return record
 
 
-@chat_router.get("/logs", response_model=CsChatLogListResponse)
+@chat_router.get("/logs", response_model=CsChatLogListResponse, dependencies=[Depends(require_admin)])
 def list_cs_chat_logs(
     session_id: str = Query(None),
     channel: str = Query(None, pattern="^(WXKF|MP|H5|WECOM_GROUP)$"),
@@ -131,7 +133,7 @@ def _lazy_cleanup_expired(db: Session) -> None:
     )
 
 
-@chat_router.get("/session/{session_id}", response_model=SessionStateOut)
+@chat_router.get("/session/{session_id}", response_model=SessionStateOut, dependencies=[Depends(require_admin)])
 def get_session_state(
     session_id: str,
     db: Session = Depends(get_db),
@@ -156,7 +158,7 @@ def get_session_state(
     )
 
 
-@chat_router.post("/session/{session_id}/route")
+@chat_router.post("/session/{session_id}/route", dependencies=[Depends(require_internal_key)])
 def route_message(
     session_id: str,
     body: dict,
@@ -205,7 +207,7 @@ def route_message(
     }
 
 
-@chat_router.post("/session/{session_id}/release")
+@chat_router.post("/session/{session_id}/release", dependencies=[Depends(require_admin)])
 def release_session(
     session_id: str,
     db: Session = Depends(get_db),
@@ -222,12 +224,6 @@ def release_session(
 
 
 # ============ 企微微信客服 / 公众号回调 ============
-
-
-class WechatCallbackPostBody(BaseModel):
-    ToUserName: str = ""
-    Encrypt: str = ""
-    AgentID: str = ""
 
 
 @wechat_router.get("/wechat/kf/callback")
@@ -268,8 +264,6 @@ def verify_wechat_url(
             extra={"reply_echo": reply_echo},
         )
         # 企微验证要求必须直接返回解密后的明文文本
-        from fastapi import Response
-
         return Response(content=reply_echo, media_type="text/plain")
     except Exception as exc:
         structured_log(
@@ -283,17 +277,69 @@ def verify_wechat_url(
 @wechat_router.post("/wechat/kf/callback")
 @wechat_router.post("/wx/msg")
 async def handle_wechat_message(
+    request: Request,
     msg_signature: str = Query(...),
     timestamp: str = Query(...),
     nonce: str = Query(...),
 ):
-    """企微客服 接收用户消息回调 (POST 请求)"""
-    # 先向企微回应 success (5秒内必须响应)
+    """企微客服 接收用户消息回调 (POST 请求)
+
+    P0 安全基线：公网可到达的端点必须先验签+解密，验签失败直接拒绝（400），
+    防止伪造消息注入；全部操作毫秒级，满足 5 秒内回 success 的硬约束。
+    完整链路（落库 + 异步调 Dify + 主动推送）按计划于 W3（Task 3.1/3.2）接入。
+    """
+    if not settings.wxkf_token or not settings.wxkf_encoding_aes_key:
+        structured_log(
+            event="wechat_kf_msg_failed",
+            status="FAILED",
+            error_msg="WXKF_TOKEN or WXKF_ENCODING_AES_KEY not configured in .env",
+        )
+        raise HTTPException(status_code=500, detail="WeChat KF credentials not configured in backend")
+
+    raw = await request.body()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty body")
+    try:
+        root = ET.fromstring(raw)
+        encrypt = root.findtext("Encrypt") or ""
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=400, detail=f"Malformed XML body: {exc}")
+    if not encrypt:
+        raise HTTPException(status_code=400, detail="Missing Encrypt field")
+
+    crypt = WXBizMsgCrypt(
+        token=settings.wxkf_token,
+        encoding_aes_key=settings.wxkf_encoding_aes_key,
+        receive_id=settings.wxkf_corp_id,
+    )
+    try:
+        # 验签失败抛 ValueError；解密后是内层明文 XML（含 FromUserName/Content 等）
+        plain_xml = crypt.decrypt_msg(msg_signature, timestamp, nonce, encrypt)
+        msg_root = ET.fromstring(plain_xml)
+        from_user = msg_root.findtext("FromUserName") or ""
+        msg_type = msg_root.findtext("MsgType") or ""
+        content = msg_root.findtext("Content") or ""
+        msg_id = msg_root.findtext("MsgId") or ""
+    except Exception as exc:
+        structured_log(
+            event="wechat_kf_msg_verify_failed",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"timestamp": timestamp},
+        )
+        raise HTTPException(status_code=400, detail=f"Callback verification failed: {exc}")
+
+    # 只记录元数据（含 open_id 的消息原文待 W5 日志湖落库；日志不存原文，个保法）
     structured_log(
         event="wechat_kf_msg_received",
         status="RECEIVED",
-        extra={"timestamp": timestamp},
+        extra={
+            "timestamp": timestamp,
+            "from_user": from_user,
+            "msg_type": msg_type,
+            "content_len": len(content),
+            "msg_id": msg_id,
+        },
     )
-    from fastapi import Response
-
+    # 5 秒约束：先回 success，AI 逻辑异步化（W3 接入 Celery 链路）
     return Response(content="success", media_type="text/plain")

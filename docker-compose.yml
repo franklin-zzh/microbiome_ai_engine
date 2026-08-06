@@ -20,8 +20,9 @@ services:
     environment:
       # 容器内访问宿主机 MySQL/Redis 使用 host.docker.internal
       # 单库 mb_ai_engine：表结构由 Alembic 管理，启动时自动 upgrade head
-      - DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:-fumate}@host.docker.internal:3306/mb_ai_engine?charset=utf8mb4
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-fumate}@host.docker.internal:6380/3
+      # P0：凭据/密钥全部必填（:? 缺值则 compose 启动失败，禁止默认凭据兜底）
+      - DATABASE_URL=mysql+pymysql://root:${MYSQL_PASSWORD:?MYSQL_PASSWORD 未配置(见 .env.example)}@host.docker.internal:3306/mb_ai_engine?charset=utf8mb4
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD 未配置(见 .env.example)}@host.docker.internal:6380/3
       - DIFY_BASE_URL=${DIFY_BASE_URL}
       - DIFY_API_KEY=${DIFY_API_KEY}
       - CS_DATASET_ID=${CS_DATASET_ID}
@@ -30,6 +31,12 @@ services:
       - WXKF_SECRET=${WXKF_SECRET}
       - WXKF_TOKEN=${WXKF_TOKEN}
       - WXKF_ENCODING_AES_KEY=${WXKF_ENCODING_AES_KEY}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未配置}
+      - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-720}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:?ADMIN_USERNAME 未配置}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD 未配置}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?INTERNAL_API_KEY 未配置}
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS 未配置}
       - APP_NAME=agent_cs
       - DEBUG=${DEBUG:-true}
     volumes:

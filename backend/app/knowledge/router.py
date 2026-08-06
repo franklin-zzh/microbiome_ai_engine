@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.logging import structured_log
+from app.core.security import require_admin, require_internal_key
 from app.knowledge.models import (
     KnowledgeItem,
     KnowledgeSourceType,
@@ -41,11 +42,12 @@ cs_router = APIRouter(prefix="/cs", tags=["cs"])
 # ============ 知识项提交 ============
 
 
-@router.post("/submit", response_model=KnowledgeItemOut)
+@router.post("/submit", response_model=KnowledgeItemOut, dependencies=[Depends(require_admin)])
 def submit_knowledge(
     body: KnowledgeItemCreate,
     db: Session = Depends(get_db),
 ):
+    """提交一条待审核知识项（仅登录用户；P0 单 admin 角色，多角色见 R5）"""
     item = KnowledgeItem(
         domain=body.domain,
         source_type=body.source_type,
@@ -74,11 +76,12 @@ def submit_knowledge(
     return item
 
 
-@router.post("/sales-case", response_model=SalesCaseOut)
+@router.post("/sales-case", response_model=SalesCaseOut, dependencies=[Depends(require_admin)])
 def submit_sales_case(
     body: SalesCaseSubmitRequest,
     db: Session = Depends(get_db),
 ):
+    """提交一条销售案例（仅登录用户）"""
     case = SalesCase(
         submitted_by=body.submitted_by,
         raw_chat_log=body.raw_chat_log,
@@ -131,7 +134,7 @@ def submit_sales_case(
 # ============ 知识审核与列表（管理后台） ============
 
 
-@admin_router.post("/knowledge/{item_id}/approve", response_model=GenericMessageResponse)
+@admin_router.post("/knowledge/{item_id}/approve", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
 def approve_knowledge(
     item_id: int,
     body: KnowledgeApproveRequest,
@@ -163,7 +166,7 @@ def approve_knowledge(
     return GenericMessageResponse(message="Approved and sync scheduled")
 
 
-@admin_router.get("/knowledge", response_model=KnowledgeListResponse)
+@admin_router.get("/knowledge", response_model=KnowledgeListResponse, dependencies=[Depends(require_admin)])
 def list_knowledge(
     domain: str = Query(None, pattern="^(CS|SALES|DOCTOR)$"),
     status: str = Query(None, pattern="^(DRAFT|PENDING|APPROVED|REJECTED)$"),
@@ -187,7 +190,7 @@ def list_knowledge(
 # ============ 未解答问题捕获（客服缺口反哺） ============
 
 
-@cs_router.post("/unanswered/capture", response_model=GenericMessageResponse)
+@cs_router.post("/unanswered/capture", response_model=GenericMessageResponse, dependencies=[Depends(require_internal_key)])
 def capture_unanswered(
     body: UnansweredCaptureRequest,
     db: Session = Depends(get_db),
@@ -218,7 +221,7 @@ def capture_unanswered(
     return GenericMessageResponse(message="Unanswered question captured")
 
 
-@cs_router.get("/unanswered", response_model=list[UnansweredQuestionOut])
+@cs_router.get("/unanswered", response_model=list[UnansweredQuestionOut], dependencies=[Depends(require_admin)])
 def list_unanswered(
     status: str = None,
     skip: int = 0,
@@ -231,7 +234,7 @@ def list_unanswered(
     return query.order_by(UnansweredQuestion.created_at.desc()).offset(skip).limit(limit).all()
 
 
-@cs_router.post("/unanswered/{question_id}/resolve", response_model=GenericMessageResponse)
+@cs_router.post("/unanswered/{question_id}/resolve", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
 def resolve_unanswered(
     question_id: int,
     knowledge_item_id: int = None,

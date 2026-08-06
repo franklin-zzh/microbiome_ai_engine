@@ -2,7 +2,7 @@
 
 > 审查日期:2026-08-05 ｜ 审查范围:全仓(backend / dify / frp-client / docker-compose / .agent 设计文档)
 > 项目定位:公司内部生产工具,面向(肠菌检测+调养)公司,微信生态 AI 客服(未来扩展销售/医生 AI 助手)
-> 状态:第 1 周→第 2 周过渡期(W1 基础架构已交付,pytest 15/15)
+> 状态:第 1 周→第 2 周过渡期(W1 基础架构已交付,pytest 15/15；**P0 安全基线已于 2026-08-06 修复完毕,pytest 22/22**)
 
 ---
 
@@ -82,12 +82,13 @@
 
 ## 四、改进路线图(按优先级,未执行)
 
-### R1 安全基线(上线前)
-- frp token 轮换 + 移入 `.env` 插值;删除仓库中的真实 token
-- JWT + 角色鉴权中间件 + admin 操作审计日志;CORS 白名单改为配置注入
-- Dify 回调共享密钥(Header 校验)
-- 默认凭据拒绝:database_url / redis_url / Dify 密钥默认值改为必填(空则启动失败)
-- 微信 POST 回调补齐验签 + 解密 + 入队;网关层风险关键词护栏 + 限流
+### R1 安全基线 ✅ 已修复(2026-08-06)
+- [x] frp token 轮换 + 移入 gitignore(`frpc.toml.example` 模板入库)；⚠️ 服务器 frps.toml 需同步新 token
+- [x] JWT + 角色鉴权(`app/core/security.py` + `/api/v1/auth/login`)；CORS 白名单 `CORS_ORIGINS` 配置注入
+- [x] Dify 回调共享密钥(`X-API-Key` / `INTERNAL_API_KEY`，workflow DSL 已带 header 占位)
+- [x] 默认凭据拒绝:config 必填校验 + 网关/Dify compose 全部 `${VAR:?}` + 本地 `.env.dify` 9 密钥轮换
+- [x] 微信 POST 回调补齐验签 + 解密 + 结构化日志(验签失败 400)；落库+入队仍按 W3 计划
+- [ ] 网关层风险关键词护栏 + 限流(W4 风控编排,与 workflow risk_guard 合并评估)
 
 ### R2 异步可靠性
 - 引入 Celery(设计已定 W3,提前落地)+ 任务重试/死信/超时

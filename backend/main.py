@@ -7,9 +7,13 @@ from app.agent_cs import models as cs_models  # noqa: F401  注册 CsChatLog / S
 from app.agent_cs.router import chat_router, wechat_router
 from app.agent_sales import models as sales_models  # noqa: F401  注册 LeadsPreview 到 Base
 from app.agent_sales.router import router as sales_router
+from app.core.auth_router import router as auth_router
+from app.core.config import get_settings
 from app.core.redis import redis_health
 from app.knowledge import models as knowledge_models  # noqa: F401  注册 KnowledgeItem 等到 Base
 from app.knowledge.router import admin_router, cs_router, router as knowledge_router
+
+settings = get_settings()
 
 
 @asynccontextmanager
@@ -25,14 +29,17 @@ def create_app() -> FastAPI:
         version="0.2.0",
         lifespan=lifespan,
     )
+    # P0：CORS 白名单从 .env 注入（逗号分隔），禁止 *（含个人信息的接口不允许任意来源跨域）
+    cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        # 注意：allow_origins=["*"] 时不能开启 allow_credentials（浏览器拒绝该组合）
+        allow_origins=cors_origins,
+        # 注意：allow_origins 含通配时不能开启 allow_credentials（浏览器拒绝该组合）
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(admin_router, prefix="/api/v1")
     app.include_router(cs_router, prefix="/api/v1")
     app.include_router(knowledge_router, prefix="/api/v1")

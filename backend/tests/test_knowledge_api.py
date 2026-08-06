@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.security import create_access_token
 from app.knowledge.models import KnowledgeItem, KnowledgeStatus, UnansweredQuestion, UnansweredStatus
 from main import app
 
@@ -17,6 +18,10 @@ settings = get_settings()
 # conftest 已把 DATABASE_URL 指向 mb_ai_engine_test；此处直接取测试库连接串
 engine = create_engine(settings.test_database_url)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# P0 鉴权：受保护接口带 token / 内部密钥访问
+ADMIN_HEADERS = {"Authorization": f"Bearer {create_access_token('pytest-admin')}"}
+INTERNAL_HEADERS = {"X-API-Key": settings.internal_api_key}
 
 
 def override_get_db():
@@ -49,7 +54,7 @@ def test_submit_knowledge():
         "tags": ["测试"],
         "source_type": "MANUAL",
         "created_by": "pytest",
-    })
+    }, headers=ADMIN_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "PENDING"
@@ -72,10 +77,10 @@ def test_approve_knowledge_triggers_sync_mock(monkeypatch):
         "title": "待审核 FAQ",
         "question": "问题",
         "answer": "答案",
-    })
+    }, headers=ADMIN_HEADERS)
     item_id = submit.json()["id"]
 
-    response = client.post(f"/api/v1/admin/knowledge/{item_id}/approve", json={"approved_by": "admin"})
+    response = client.post(f"/api/v1/admin/knowledge/{item_id}/approve", json={"approved_by": "admin"}, headers=ADMIN_HEADERS)
     assert response.status_code == 200
     assert response.json()["message"] == "Approved and sync scheduled"
     assert captured.get("called") is True
@@ -86,21 +91,21 @@ def test_capture_unanswered():
         "user_query": "测试未解答问题",
         "match_score": 0.45,
         "context": {"channel": "dify"},
-    })
+    }, headers=INTERNAL_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "Unanswered question captured"
 
 
 def test_list_unanswered():
-    response = client.get("/api/v1/cs/unanswered?status=OPEN")
+    response = client.get("/api/v1/cs/unanswered?status=OPEN", headers=ADMIN_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 1
 
 
 def test_list_knowledge():
-    response = client.get("/api/v1/admin/knowledge?domain=CS&status=PENDING")
+    response = client.get("/api/v1/admin/knowledge?domain=CS&status=PENDING", headers=ADMIN_HEADERS)
     assert response.status_code == 200
     data = response.json()
     assert data["total"] >= 1
@@ -118,17 +123,17 @@ def test_submit_with_category_and_filter():
         "source_type": "MANUAL",
         "created_by": "pytest",
         "category": "product.probiotics",
-    })
+    }, headers=ADMIN_HEADERS)
     assert submit.status_code == 200
     assert submit.json()["category"] == "product.probiotics"
 
     # 未指定 category 时兜底为 GENERAL（test_submit_knowledge 提交的条目）
-    resp = client.get("/api/v1/admin/knowledge?category=GENERAL")
+    resp = client.get("/api/v1/admin/knowledge?category=GENERAL", headers=ADMIN_HEADERS)
     assert resp.status_code == 200
     assert resp.json()["total"] >= 1
 
     # 按 category 精确筛选
-    resp = client.get("/api/v1/admin/knowledge?category=product.probiotics")
+    resp = client.get("/api/v1/admin/knowledge?category=product.probiotics", headers=ADMIN_HEADERS)
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] >= 1

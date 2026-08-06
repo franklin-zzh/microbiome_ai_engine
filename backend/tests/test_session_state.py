@@ -19,11 +19,16 @@ from app.agent_cs import services as sm
 from app.agent_cs.models import SessionState
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.security import create_access_token
 from main import app
 
 settings = get_settings()
 client = TestClient(app)
 redis = Redis.from_url(settings.redis_url)
+
+# P0 鉴权：内部链路接口带 X-API-Key，管理读接口带 admin token
+INTERNAL_HEADERS = {"X-API-Key": settings.internal_api_key}
+ADMIN_HEADERS = {"Authorization": f"Bearer {create_access_token('pytest-admin')}"}
 
 # 与 test_knowledge_api 一致：请求级 db 依赖指向测试库（conftest 已建表）
 engine = create_engine(settings.test_database_url)
@@ -47,7 +52,7 @@ def _route(session_id: str, message: str = "普通问题", channel: str = "WXKF"
         "user_message": message,
         "channel": channel,
         "open_id": open_id,
-    })
+    }, headers=INTERNAL_HEADERS)
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -166,7 +171,7 @@ def test_get_session_state_falls_back_to_db():
         _route(sid, message="我要转人工")
         redis.delete(sm.SESSION_STATE_KEY.format(session_id=sid))
 
-        resp = client.get(f"/api/v1/chat/session/{sid}")
+        resp = client.get(f"/api/v1/chat/session/{sid}", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["state"] == "HUMAN_MODE"
     finally:
