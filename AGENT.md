@@ -20,7 +20,7 @@
 当你编写、重构或调试代码时，必须严格遵守以下技术规范：
 
 - **核心语言/框架**：Python 3.11+ (FastAPI) + Pydantic v2 + SQLAlchemy 2.x
-- **Agent & RAG 引擎**：Dify `1.16.1` 私有化部署于局域网服务器 `192.168.110.16`（控制台 `http://192.168.110.16:3080` / API `http://192.168.110.16:5081`，数据卷 `/data/data2025/fmt_software/fmt-infra/dify/docker/volumes`，见 `DEPLOY-DIFY.md`）+ Embedding/LLM 自配 API Key
+- **Agent & RAG 引擎**：Dify `1.16.1` 私有化部署于局域网服务器 `192.168.110.16`（官方 compose，nginx 统一入口：控制台与 API 均走 `http://192.168.110.16:3080`，数据卷 `/data/data2025/fmt_software/fmt-infra/dify/docker/volumes`，见 `dify/docs/OFFICIAL-DEPLOY-DIFY.md`）+ Embedding/LLM 自配 API Key
 - **缓存与队列**：Redis（本地 Docker `redis` 容器，`6380` 端口，密码 `fumate`，**本项目独占 db3**；会话状态机、5 秒异步回包上下文缓存；Celery 队列于第 3 周引入）
 - **数据存储**：**MySQL 8 单库 `mb_ai_engine`**（本地 Docker `global-mysql8` 容器，`3306` 端口，root/fumate）：
     - 领域隔离靠表名前缀：`core_*` 知识库体系（core_knowledge_items / core_unanswered_questions / core_sales_cases）+ `cs_*` 客服会话体系（cs_chat_logs / cs_session_state / cs_leads_preview）
@@ -83,7 +83,7 @@ H5 官网聊天窗  ─┘        │                                           
 D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-health-agent-platform/ 迁移至此；项目名 agent_cs）
 ├── AGENT.md                      # 本文件（AI 核心索引与全局大纲）
 ├── docker-compose.yml            # 网关栈：FastAPI backend（MySQL/Redis 复用宿主容器）
-├── docker-compose.dify.yml       # Dify 私有化部署（官方镜像 1.16.1，对外仅 web:3080 / api:5081）
+├── docker-compose.dify.yml       # Dify 私有化部署精简参考版（对外 web:3080 / api:5081；服务器实际用官方 compose，见 dify/docs/OFFICIAL-DEPLOY-DIFY.md）
 ├── .env.dify.example             # Dify 部署环境变量模板（复制为 .env.dify 使用）
 ├── DEPLOY-DIFY.md                # Dify 局域网服务器部署手册（部署到 192.168.110.16）
 ├── backend/                      # FastAPI 网关服务
@@ -147,7 +147,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 - **初始化 MySQL 单库**：`cd backend && .venv\Scripts\python.exe scripts\setup_db.py`（建 mb_ai_engine / mb_ai_engine_test）
 - **双库 → 单库数据迁移（仅旧环境执行一次）**：`cd backend && .venv\Scripts\python.exe scripts\migrate_single_db.py`（RENAME TABLE 跨库搬表 + 索引改名），随后 `alembic stamp head`
 - **应用表结构迁移**：`cd backend && $env:DATABASE_URL="mysql+pymysql://root:fumate@localhost:3306/mb_ai_engine?charset=utf8mb4"; .venv\Scripts\python.exe -m alembic upgrade head`（docker compose 启动时自动执行）
-- **启动 Dify 私有化（服务器 192.168.110.16）**：`docker compose -f docker-compose.dify.yml --env-file .env.dify up -d`（对外端口 web:3080 / api:5081，完整步骤见 `DEPLOY-DIFY.md`）
+- **启动 Dify 私有化（服务器 192.168.110.16）**：服务器实际运行官方 compose（`/data/data2025/fmt_software/fmt-infra/dify/docker`，nginx 统一入口 `http://192.168.110.16:3080`），完整步骤见 `dify/docs/OFFICIAL-DEPLOY-DIFY.md`；仓库内 `docker-compose.dify.yml` 为精简参考版（web:3080 / api:5081），仅本地参考/回滚用
 - **查看服务日志**：`docker compose logs -f backend`
 
 ### 🧪 自动化测试 (Testing)
@@ -162,9 +162,9 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-06 15:31
+- **最近一次同步时间**：2026-08-07 17:15
 
-- **当前关注的架构焦点**：P0 安全基线已落地（2026-08-06）——① 三层鉴权：人类用户 JWT（`app/core/security.py` + `POST /api/v1/auth/login`，.env 单 admin 账号，payload 带 role 为 R5 多角色留路）+ Dify 回调/内部链路 X-API-Key（`INTERNAL_API_KEY`）+ 微信官方签名验签；② 微信 POST 回调补齐验签+解密+结构化日志（XML body 解析，验签失败 400，5 秒内回 success；落库+入队仍按计划 W3）；③ 默认凭据全部拒绝：config 必填校验（缺 `DATABASE_URL/REDIS_URL/JWT_SECRET/ADMIN_*/INTERNAL_API_KEY` 启动即失败）、网关 compose 与 Dify compose 全部 `${VAR:?}`（36 处）、`.env.dify` 本地已轮换 9 个随机密钥；④ CORS 白名单配置注入（`CORS_ORIGINS`，禁止 *）；⑤ frp token 已轮换（新 token 在 gitignore 的 `frp-client/frpc.toml`，模板 `frpc.toml.example`）——⚠️ 服务器 frps.toml auth.token 待同步。pytest 22/22 通过（新增 test_auth.py 5 例）。下一步：W2 数据 ETL 清洗与 FAQ 问答对整理（Task 2.1/2.2/2.3）。
+- **当前关注的架构焦点**：知识审核闭环任务化（2026-08-07）——① 审核/驳回/下线全部落 `core_sync_tasks` 对账表（outbox：action CREATE/UPDATE/DELETE + 指数退避重试，`process_sync_tasks` 可重放，解决 BackgroundTasks 内存丢任务）；② `sync_status`（NOT_SYNCED/QUEUED/INDEXING/COMPLETED/FAILED/DELETING）与审核 `status`（+REVOKED）分离；③ `reject`/`revoke` 端点 + Dify DELETE 同步（1.16.1 契约冻结见 `docs/DIFY-API-CONTRACT.md`，实测脚本 `backend/scripts/verify_dify_contract.py` 待 DIFY_API_KEY 回填后运行）；④ 审核后台单页 `http://localhost:8000/admin`（登录/录入/列表/详情/通过/驳回/下线/原文档上传下载，文件存 `backend/public/uploads`，仅鉴权下载）；⑤ `dataset_id_for_domain` 映射表化：`CS_DOC_DATASET_ID`（文档库双库预留，未配回落 QA 库）/ `DOCTOR_DATASET_ID`（医生库预留，未配拒绝）。pytest 26/26。下一步：回填 `.env` 的 DIFY_API_KEY/CS_DATASET_ID 后跑契约实测 + 全链路验证。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。
@@ -176,4 +176,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
     - [ ] 7. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
     - [ ] 8. 第 3 周：企微微信客服消息解密后落库 + 主动推送、Celery 异步队列（回调验签/解密已提前完成）。
     - [ ] 9. 接通负面情绪计数：`increment_negative_streak` 当前是死代码，"连续负面≥2 转人工"规则未接线（AGENT.md §3.2-3 有定义，P1#7）。
-    - [ ] 10. 知识驳回/删除同步删 Dify 文档 + 对账脚本（P1#6，R2）。
+    - [x] 10. 知识驳回/删除同步删 Dify 文档 + 对账脚本（P1#6，R2）——2026-08-07 落地：reject/revoke 端点 + core_sync_tasks 对账表 + Dify DELETE（1.16.1 契约见 docs/DIFY-API-CONTRACT.md）。
+    - [ ] 11. ⏳ Dify 契约实测：`.env` 回填 DIFY_API_KEY/CS_DATASET_ID 后运行 `backend/scripts/verify_dify_contract.py`（qa_model/text_model 创建-索引-删除全链路 + 路径探测），结果回填 docs/DIFY-API-CONTRACT.md 待实测清单。
+    - [ ] 12. 双库拆分（目标态）：CS_DOC_DATASET_ID 已预留（text_model/hierarchical_model 路由），数据量上来后建 CS_DOC 库 + 工作流双检索节点 + Rerank。
+    - [ ] 13. 同步 worker 化：当前 `sync_approved_knowledge` 内联消费（后台线程），生产可改独立 worker/定时任务调 `process_sync_tasks`。

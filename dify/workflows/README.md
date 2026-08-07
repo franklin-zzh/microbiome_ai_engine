@@ -37,10 +37,10 @@ Dify 当前版本支持从 DSL 文件导入 Chatbot / Workflow 应用：
 ## 4. 数据自进化闭环
 
 1. 客服 Agent 遇到低分问题 -> 回调写入 `unanswered_questions`。
-2. 运营在 Admin 后台补充答案并审核 -> 生成 `knowledge_items` APPROVED 记录。
-3. 审核通过触发 BackgroundTasks -> 调用 Dify Dataset API 写入向量库。
+2. 运营在 Admin 后台（`http://localhost:8000/admin`）补充答案并审核 -> 生成 `knowledge_items` APPROVED 记录。
+3. 审核通过落 `core_sync_tasks` 对账任务 -> 后台消费调 Dify Dataset API 写入向量库（异步索引轮询至 completed；失败指数退避重试，`process_sync_tasks` 可重放）。
 4. 销售 Copilot 使用 Sales_KB 生成话术，成交后通过案例提炼器提交 SALES_CASE。
-5. Admin 审核销售案例 -> 再次同步至 Sales_KB。
+5. Admin 审核销售案例 -> 再次同步至 Sales_KB；驳回/下线 -> Dify 文档删除（DELETE + 清 vector_doc_id）。
 
 ## 5. 安全护栏
 

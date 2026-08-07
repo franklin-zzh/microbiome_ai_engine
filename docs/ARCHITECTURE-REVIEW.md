@@ -60,7 +60,7 @@
 |---|---|---|---|
 | 17 | 依赖无锁文件(`requirements.txt` 区间版本,镜像 `python:3.11-slim` 不固定 patch) | `backend/requirements.txt`、`backend/Dockerfile:1` | 构建不可复现;建议 uv/pip-tools 锁定 + 镜像 digest 固定 |
 | 18 | 可观测性仅 stdout JSON 日志:无 metrics(请求量/延迟/Dify 耗时/token 消耗/队列深度/错误率)、无告警;6 周验收含"72 小时稳定性",缺告警难以保障 | `backend/app/core/logging.py` | 故障发现靠人肉看日志;建议 Prometheus + 集中日志(Loki/ELK)+ 告警规则 |
-| 19 | `ROOT_ENV_FILE = parents[3]` 依赖目录层级,打包/容器内路径变化即失效;`DIFY_BASE_URL` 默认指向云版 `api.dify.ai` 而实际部署是局域网 `192.168.110.16:5081`,默认值误导 | `backend/app/core/config.py:8,37` | 部署环境差异踩坑 |
+| 19 | `ROOT_ENV_FILE = parents[3]` 依赖目录层级,打包/容器内路径变化即失效;`DIFY_BASE_URL` 默认指向云版 `api.dify.ai` 而实际部署是局域网 `192.168.110.16:3080`,默认值误导(**已修复**:config.py 默认值已同步为局域网 3080) | `backend/app/core/config.py:8,37` | 部署环境差异踩坑 |
 | 20 | 代码小问题:router 内局部 `from fastapi import Response`;`wechat_router` 以 `/api/v1` 和 `""` 双前缀重复挂载(兼容旧路径,需文档化);`list_unanswered`/`resolve_unanswered` 参数未用 Query 校验;`UnansweredQuestion.match_score` 存 String 而 `CsChatLog` 用 Numeric,不一致 | `backend/app/agent_cs/router.py:271,285,42`、`backend/app/knowledge/router.py:221-244`、`backend/app/knowledge/models.py:97` | 可读性/一致性小问题 |
 | 21 | **git 工作区有未提交的大重构**:`dify-workflows/`、`docker-compose.dify.yml`、`DEPLOY-DIFY.md` 已删除,新 `dify/` 目录(deploy/docs/workflows)未跟踪 | `git status`(D 状态 ×6 + `?? dify/`) | 重构成果未入库,存在丢失风险;尽快提交 |
 | 22 | 满意度收集交互未定义(设计评审待确认 #4);转人工后的人工通知/接管页面未设计 | `.agent/design-review.md` 四-4 | W5 落地前需业务拍板 |

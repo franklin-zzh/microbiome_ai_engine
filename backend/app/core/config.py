@@ -45,10 +45,13 @@ class Settings(BaseSettings):
     negative_streak_threshold: int = 2       # 连续负面情绪 >= 2 转 HUMAN_MODE
 
     # ============ Dify（共享知识库引擎 engine_rag，未来可拆分为独立服务）============
-    dify_base_url: str = "http://192.168.110.16:5081/v1"
+    dify_base_url: str = "http://192.168.110.16:3080/v1"
     dify_api_key: str = ""
-    cs_dataset_id: str = ""
-    sales_dataset_id: str = ""
+    # 域 -> 知识库映射（留空 = 未启用，启用前 dataset_id_for_domain 会拒绝该域/形态）
+    cs_dataset_id: str = ""          # CS 问答库（qa_model）
+    cs_doc_dataset_id: str = ""      # CS 长文档库（text_model/hierarchical_model，双库预留）
+    sales_dataset_id: str = ""       # 销售案例库
+    doctor_dataset_id: str = ""      # 医生域独立库（Phase 3 预留）
 
     cs_score_threshold: float = 0.65
 

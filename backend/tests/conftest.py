@@ -54,6 +54,7 @@ def migrated_test_db():
             "core_knowledge_items",
             "core_unanswered_questions",
             "core_sales_cases",
+            "core_sync_tasks",
         ):
             conn.exec_driver_sql(f"DROP TABLE IF EXISTS `{table}`")
         conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1")
@@ -74,6 +75,7 @@ def migrated_test_db():
             "core_knowledge_items",
             "core_unanswered_questions",
             "core_sales_cases",
+            "core_sync_tasks",
         ):
             conn.exec_driver_sql(f"DROP TABLE IF EXISTS `{table}`")
         conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1")

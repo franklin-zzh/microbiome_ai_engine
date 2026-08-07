@@ -1,14 +1,18 @@
-"""知识库域（横切共享，mb_ai_engine.core_*）：REST 路由
+﻿"""知识库域（横切共享，mb_ai_engine.core_*）：REST 路由
 
-- router（/knowledge）：知识项提交 / 销售案例提交
-- admin_router（/admin）：知识审核与列表
+- router（/knowledge）：知识项提交 / 销售案例提交 / 原始文档上传
+- admin_router（/admin）：知识审核与列表 / 原始文档下载
 - cs_router（/cs）：未解答问题捕获（客服缺口反哺知识库，URL 前缀兼容旧版）
 """
+import uuid
+from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.logging import structured_log
 from app.core.security import require_admin, require_internal_key
@@ -27,16 +31,71 @@ from app.knowledge.schemas import (
     KnowledgeItemCreate,
     KnowledgeItemOut,
     KnowledgeListResponse,
+    KnowledgeRejectRequest,
     SalesCaseOut,
     SalesCaseSubmitRequest,
     UnansweredCaptureRequest,
     UnansweredQuestionOut,
 )
-from app.knowledge.services import sync_approved_knowledge
+from app.knowledge.services import sync_approved_knowledge, sync_removed_knowledge
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 cs_router = APIRouter(prefix="/cs", tags=["cs"])
+
+# ============ 原始文档存储（public/uploads，SSOT；未来可切 MinIO/OSS）============
+PUBLIC_ROOT = Path(__file__).resolve().parent.parent.parent / "public"
+UPLOAD_DIR = PUBLIC_ROOT / "uploads"
+ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".md"}
+MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
+
+settings = get_settings()
+
+
+# ============ 原始文档上传/下载 ============
+
+
+@router.post("/upload", dependencies=[Depends(require_admin)])
+def upload_knowledge_file(file: UploadFile = File(...)):
+    """上传原始文档（审核时供人工查看）。返回相对路径，提交知识项时写入 source_file。"""
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext or 'unknown'}")
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    # 服务端生成文件名（uuid），不信任用户文件名，杜绝路径穿越
+    name = f"{uuid.uuid4().hex}{ext}"
+    dest = UPLOAD_DIR / name
+    size = 0
+    try:
+        with dest.open("wb") as out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_SIZE:
+                    raise HTTPException(status_code=413, detail="File too large (max 20MB)")
+                out.write(chunk)
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+
+    structured_log(event="knowledge_file_uploaded", status="SUCCESS", extra={"size": size, "ext": ext})
+    return {"filename": file.filename, "path": f"uploads/{name}", "size": size}
+
+
+@admin_router.get("/knowledge/{item_id}/source", dependencies=[Depends(require_admin)])
+def download_knowledge_source(item_id: int, db: Session = Depends(get_db)):
+    """下载知识项关联的原始文档（鉴权下载；uploads 目录不直接暴露静态访问）。"""
+    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    if not item.source_file:
+        raise HTTPException(status_code=404, detail="No source file attached")
+
+    # 路径穿越防护：resolve 后必须仍位于 PUBLIC_ROOT 内
+    path = (PUBLIC_ROOT / item.source_file).resolve()
+    if not path.is_relative_to(PUBLIC_ROOT.resolve()) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Source file not found")
+    return FileResponse(path, filename=Path(item.source_file).name)
 
 
 # ============ 知识项提交 ============
@@ -57,6 +116,7 @@ def submit_knowledge(
         question=body.question,
         answer=body.answer,
         tags=body.tags or [],
+        source_file=body.source_file,
         cs_gap_id=body.cs_gap_id,
         sales_case_id=body.sales_case_id,
         created_by=body.created_by,
@@ -166,10 +226,74 @@ def approve_knowledge(
     return GenericMessageResponse(message="Approved and sync scheduled")
 
 
+@admin_router.post("/knowledge/{item_id}/reject", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def reject_knowledge(
+    item_id: int,
+    body: KnowledgeRejectRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """驳回知识项（PENDING/DRAFT -> REJECTED）。若已同步过，异步删除 Dify 文档。"""
+    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    if item.status == KnowledgeStatus.REJECTED:
+        return GenericMessageResponse(message="Item already rejected")
+
+    item.reject(rejected_by=body.operator)
+    db.commit()
+    db.refresh(item)
+
+    structured_log(
+        event="knowledge_rejected",
+        item_id=item.id,
+        domain=item.domain.value,
+        source_type=item.source_type.value,
+        status="REJECTED",
+        extra={"operator": body.operator, "vector_doc_id": item.vector_doc_id},
+    )
+
+    if item.vector_doc_id:
+        background_tasks.add_task(sync_removed_knowledge, item.id)
+    return GenericMessageResponse(message="Rejected")
+
+
+@admin_router.post("/knowledge/{item_id}/revoke", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def revoke_knowledge(
+    item_id: int,
+    body: KnowledgeRejectRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """下线已上线知识（APPROVED -> REVOKED），异步删除 Dify 文档并清向量引用。"""
+    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    if item.status != KnowledgeStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Only APPROVED items can be revoked")
+
+    item.revoke(revoked_by=body.operator)
+    db.commit()
+    db.refresh(item)
+
+    structured_log(
+        event="knowledge_revoked",
+        item_id=item.id,
+        domain=item.domain.value,
+        source_type=item.source_type.value,
+        status="REVOKED",
+        extra={"operator": body.operator, "vector_doc_id": item.vector_doc_id},
+    )
+
+    if item.vector_doc_id:
+        background_tasks.add_task(sync_removed_knowledge, item.id)
+    return GenericMessageResponse(message="Revoked, doc deletion scheduled")
+
+
 @admin_router.get("/knowledge", response_model=KnowledgeListResponse, dependencies=[Depends(require_admin)])
 def list_knowledge(
     domain: str = Query(None, pattern="^(CS|SALES|DOCTOR)$"),
-    status: str = Query(None, pattern="^(DRAFT|PENDING|APPROVED|REJECTED)$"),
+    status: str = Query(None, pattern="^(DRAFT|PENDING|APPROVED|REJECTED|REVOKED)$"),
     category: str = Query(None, min_length=1, max_length=64),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),

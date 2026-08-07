@@ -1,0 +1,285 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库审核后台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", system-ui, sans-serif; background: #f5f6f8; color: #222; }
+  header { background: #1f2d3d; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; flex: 1; }
+  #logout { background: none; border: 1px solid #ffffff66; color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; }
+  main { max-width: 1200px; margin: 20px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px #0000001a; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  input, select, textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  textarea { width: 100%; min-height: 90px; resize: vertical; font-family: inherit; }
+  button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  .btn-primary { background: #3370ff; color: #fff; }
+  .btn-success { background: #00b42a; color: #fff; }
+  .btn-danger { background: #f53f3f; color: #fff; }
+  .btn-warn { background: #ff7d00; color: #fff; }
+  .btn-ghost { background: #f2f3f5; color: #333; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
+  th { background: #fafbfc; color: #666; font-weight: 600; white-space: nowrap; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #f0f5ff; }
+  .tag { display: inline-block; background: #e8f3ff; color: #3370ff; border-radius: 3px; padding: 1px 6px; margin: 0 4px 2px 0; font-size: 12px; }
+  .badge { display: inline-block; border-radius: 3px; padding: 1px 8px; font-size: 12px; }
+  .b-PENDING { background: #fff7e6; color: #d48806; }
+  .b-APPROVED { background: #e8f8ec; color: #00b42a; }
+  .b-REJECTED { background: #ffece8; color: #f53f3f; }
+  .b-REVOKED { background: #f2f3f5; color: #666; }
+  .b-DRAFT { background: #f2f3f5; color: #666; }
+  .detail { white-space: pre-wrap; background: #fafbfc; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 14px; line-height: 1.7; }
+  .meta { color: #888; font-size: 12px; margin-top: 8px; }
+  .actions { margin-top: 12px; display: flex; gap: 8px; }
+  #loginBox { max-width: 360px; margin: 80px auto; }
+  #loginBox .card { padding: 24px; }
+  #loginBox .row { flex-direction: column; align-items: stretch; }
+  .msg { color: #f53f3f; font-size: 13px; min-height: 18px; }
+  .filters { margin-bottom: 12px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 知识库审核后台</h1>
+  <span id="userName"></span>
+  <button id="logout" class="hidden">退出</button>
+</header>
+
+<div id="loginBox" class="hidden">
+  <div class="card">
+    <h2 style="margin-bottom:12px">登录</h2>
+    <div class="row">
+      <input id="username" placeholder="用户名" autocomplete="username">
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      <button class="btn-primary" onclick="login()">登录</button>
+      <div class="msg" id="loginMsg"></div>
+    </div>
+  </div>
+</div>
+
+<main id="mainBox" class="hidden">
+  <div class="card">
+    <h3 style="margin-bottom:10px">📝 新增知识项</h3>
+    <div class="row" style="margin-bottom:8px">
+      <select id="nDomain">
+        <option value="CS">CS（客服）</option>
+        <option value="SALES">SALES（销售）</option>
+        <option value="DOCTOR">DOCTOR（医生）</option>
+      </select>
+      <input id="nTitle" placeholder="标题（必填）" style="flex:2; min-width:200px">
+      <input id="nCategory" placeholder="分类（如 product.probiotics，默认 GENERAL）" style="flex:1; min-width:180px">
+    </div>
+    <div style="margin-bottom:8px"><textarea id="nQuestion" placeholder="问题（Q&A 形态，可留空）"></textarea></div>
+    <div style="margin-bottom:8px"><textarea id="nAnswer" placeholder="答案 / 内容（必填）"></textarea></div>
+    <div class="row">
+      <input id="nTags" placeholder="标签（逗号分隔，可选）" style="flex:1">
+      <input type="file" id="nFile" accept=".pdf,.doc,.docx,.txt,.md">
+      <span id="nFileInfo" class="meta"></span>
+      <button class="btn-primary" onclick="submitItem()">提交待审</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row filters">
+      <h3 style="flex:1">📋 知识列表</h3>
+      <select id="fDomain" onchange="loadList()">
+        <option value="">全部域</option>
+        <option value="CS">CS</option>
+        <option value="SALES">SALES</option>
+        <option value="DOCTOR">DOCTOR</option>
+      </select>
+      <select id="fStatus" onchange="loadList()">
+        <option value="PENDING">待审核</option>
+        <option value="APPROVED">已上线</option>
+        <option value="REJECTED">已驳回</option>
+        <option value="REVOKED">已下线</option>
+        <option value="">全部状态</option>
+      </select>
+      <button class="btn-ghost" onclick="loadList()">刷新</button>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>域</th><th>标题</th><th>问题</th><th>状态</th><th>同步</th><th>来源</th><th>提交人</th></tr></thead>
+      <tbody id="listBody"><tr><td colspan="8" class="meta">加载中…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card hidden" id="detailCard">
+    <div class="row" style="margin-bottom:8px">
+      <h3 style="flex:1">🔍 详情 #<span id="dId"></span></h3>
+      <span class="badge b-PENDING" id="dStatus"></span>
+    </div>
+    <div class="meta">域：<span id="dDomain"></span> ｜ 分类：<span id="dCategory"></span> ｜ 同步状态：<span id="dSync"></span> ｜ vector_doc_id：<span id="dDocId"></span></div>
+    <div id="dFileLink" class="meta" style="margin-top:4px"></div>
+    <div class="detail" id="dBody"></div>
+    <div class="actions">
+      <button class="btn-success" id="btnApprove" onclick="act('approve')">✅ 通过并同步</button>
+      <button class="btn-danger" id="btnReject" onclick="act('reject')">❌ 驳回</button>
+      <button class="btn-warn" id="btnRevoke" onclick="act('revoke')">⬇️ 下线</button>
+    </div>
+    <div class="msg" id="actMsg"></div>
+  </div>
+</main>
+
+<script>
+const API = "/api/v1";
+let token = localStorage.getItem("kb_token") || "";
+let currentId = null;
+let uploadedPath = "";
+
+function hdr(json = false) {
+  const h = {};
+  if (token) h["Authorization"] = "Bearer " + token;
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
+async function api(path, method = "GET", body = null) {
+  const opt = { method, headers: hdr(body && !(body instanceof FormData)) };
+  if (body && !(body instanceof FormData)) opt.body = JSON.stringify(body);
+  if (body instanceof FormData) opt.body = body;
+  const r = await fetch(API + path, opt);
+  if (r.status === 401 && token) { token = ""; localStorage.removeItem("kb_token"); showLogin(); throw new Error("登录已过期"); }
+  if (!r.ok) {
+    let msg = r.status + " " + r.statusText;
+    try { const j = await r.json(); msg = j.detail || j.message || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  return r.status === 204 ? null : r.json();
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+function showLogin() { document.getElementById("loginBox").classList.remove("hidden"); document.getElementById("mainBox").classList.add("hidden"); }
+function showMain() { document.getElementById("loginBox").classList.add("hidden"); document.getElementById("mainBox").classList.remove("hidden"); }
+
+async function login() {
+  const u = document.getElementById("username").value.trim();
+  const p = document.getElementById("password").value;
+  document.getElementById("loginMsg").textContent = "";
+  try {
+    const j = await api("/auth/login", "POST", { username: u, password: p });
+    token = j.access_token; localStorage.setItem("kb_token", token);
+    document.getElementById("userName").textContent = j.role === "admin" ? "管理员" : j.role;
+    document.getElementById("logout").classList.remove("hidden");
+    showMain(); loadList();
+  } catch (e) { document.getElementById("loginMsg").textContent = "登录失败：" + e.message; }
+}
+document.getElementById("logout").onclick = () => { token = ""; localStorage.removeItem("kb_token"); document.getElementById("userName").textContent = ""; document.getElementById("logout").classList.add("hidden"); showLogin(); };
+
+async function loadList() {
+  const dom = document.getElementById("fDomain").value;
+  const st = document.getElementById("fStatus").value;
+  const q = new URLSearchParams({ limit: "50" });
+  if (dom) q.set("domain", dom);
+  if (st) q.set("status", st);
+  try {
+    const j = await api("/admin/knowledge?" + q.toString());
+    const tb = document.getElementById("listBody");
+    if (!j.items.length) { tb.innerHTML = '<tr><td colspan="8" class="meta">暂无数据</td></tr>'; return; }
+    tb.innerHTML = j.items.map(it => `
+      <tr class="clickable" onclick="openDetail(${it.id})">
+        <td>${it.id}</td><td>${esc(it.domain)}</td><td>${esc(it.title)}</td>
+        <td>${esc((it.question || "").slice(0, 40))}</td>
+        <td><span class="badge b-${it.status}">${it.status}</span></td>
+        <td>${esc(it.sync_status || "-")}</td>
+        <td>${esc(it.source_type)}</td><td>${esc(it.created_by || "-")}</td>
+      </tr>`).join("");
+  } catch (e) { document.getElementById("listBody").innerHTML = '<tr><td colspan="8" class="meta">加载失败：' + esc(e.message) + '</td></tr>'; }
+}
+
+async function openDetail(id) {
+  currentId = id;
+  try {
+    const list = await api("/admin/knowledge?limit=100");
+    const it = list.items.find(x => x.id === id);
+    if (!it) { alert("条目不存在"); return; }
+    document.getElementById("detailCard").classList.remove("hidden");
+    document.getElementById("dId").textContent = it.id;
+    document.getElementById("dStatus").textContent = it.status;
+    document.getElementById("dStatus").className = "badge b-" + it.status;
+    document.getElementById("dDomain").textContent = it.domain;
+    document.getElementById("dCategory").textContent = it.category || "GENERAL";
+    document.getElementById("dSync").textContent = it.sync_status || "-";
+    document.getElementById("dDocId").textContent = it.vector_doc_id || "-";
+    document.getElementById("dBody").textContent =
+      (it.question ? "【问题】\n" + it.question + "\n\n【答案】\n" + it.answer : it.answer) +
+      (it.tags && it.tags.length ? "\n\n【标签】" + it.tags.join("、") : "");
+    const fl = document.getElementById("dFileLink");
+    if (it.source_file) fl.innerHTML = '📎 <a href="javascript:downloadSource(' + it.id + ')">下载原始文档</a> (' + esc(it.source_file) + ')';
+    else fl.textContent = "";
+    document.getElementById("btnApprove").style.display = it.status === "APPROVED" ? "none" : "";
+    document.getElementById("btnReject").style.display = it.status === "APPROVED" ? "none" : "";
+    document.getElementById("btnRevoke").style.display = it.status === "APPROVED" ? "" : "none";
+    document.getElementById("actMsg").textContent = "";
+    document.getElementById("detailCard").scrollIntoView({ behavior: "smooth" });
+  } catch (e) { alert("加载详情失败：" + e.message); }
+}
+
+async function act(action) {
+  const name = { approve: "通过并同步", reject: "驳回", revoke: "下线" }[action];
+  if (!confirm("确认" + name + "该知识项？" + (action === "revoke" ? "（将删除 Dify 中的文档与向量）" : ""))) return;
+  try {
+    const body = action === "approve" ? { approved_by: "admin" } : { operator: "admin" };
+    const j = await api(`/admin/knowledge/${currentId}/${action}`, "POST", body);
+    document.getElementById("actMsg").textContent = "✅ " + j.message;
+    loadList(); openDetail(currentId);
+  } catch (e) { document.getElementById("actMsg").textContent = "操作失败：" + e.message; }
+}
+
+async function downloadSource(id) {
+  const r = await fetch(`${API}/admin/knowledge/${id}/source`, { headers: hdr() });
+  if (!r.ok) { alert("下载失败：" + r.status); return; }
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "source_" + id + (blob.type.includes("pdf") ? ".pdf" : "");
+  a.click(); URL.revokeObjectURL(a.href);
+}
+
+document.getElementById("nFile").onchange = async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f);
+  try {
+    const j = await api("/knowledge/upload", "POST", fd);
+    uploadedPath = j.path;
+    document.getElementById("nFileInfo").textContent = "已上传：" + f.name + "（" + j.path + "）";
+  } catch (e) { document.getElementById("nFileInfo").textContent = "上传失败：" + e.message; }
+};
+
+async function submitItem() {
+  const title = document.getElementById("nTitle").value.trim();
+  const answer = document.getElementById("nAnswer").value.trim();
+  if (!title || !answer) { alert("标题和答案必填"); return; }
+  const body = {
+    domain: document.getElementById("nDomain").value,
+    title,
+    question: document.getElementById("nQuestion").value.trim() || null,
+    answer,
+    category: document.getElementById("nCategory").value.trim() || "GENERAL",
+    tags: document.getElementById("nTags").value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    source_file: uploadedPath || null,
+    created_by: "admin",
+  };
+  try {
+    const j = await api("/knowledge/submit", "POST", body);
+    alert("已提交待审 #" + j.id);
+    document.getElementById("nTitle").value = ""; document.getElementById("nQuestion").value = "";
+    document.getElementById("nAnswer").value = ""; document.getElementById("nTags").value = "";
+    document.getElementById("nFile").value = ""; document.getElementById("nFileInfo").textContent = "";
+    uploadedPath = ""; loadList();
+  } catch (e) { alert("提交失败：" + e.message); }
+}
+
+document.getElementById("password").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+document.getElementById("username").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+
+if (token) { showMain(); loadList(); } else { showLogin(); }
+</script>
+</body>
+</html>

@@ -22,6 +22,8 @@ node_modules/
 *.log
 *.pid
 .reasonix/
+# Dify 源码临时参考目录（含嵌入 .git 与 tar 包，勿入库）
+.tmp-dify-src/
 .vscode/
 .idea/
 # Dify compose 数据卷（PostgreSQL/Weaviate/Dify 存储等运行数据，不入库）
@@ -30,3 +32,6 @@ docker/
 frp-client/frp/
 # frp 客户端真实配置（含 token，不入库；模板见 frp-client/frpc.toml.example）
 frp-client/frpc.toml
+# 原始文档上传存储（SSOT 文件本体不入库，保留 .gitkeep）
+backend/public/uploads/*
+!backend/public/uploads/.gitkeep

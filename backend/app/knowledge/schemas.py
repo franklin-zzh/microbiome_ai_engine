@@ -12,6 +12,8 @@ class KnowledgeItemBase(BaseModel):
     tags: Optional[List[str]] = Field(default_factory=list)
     # 主分类（强规范枚举/路径，如 product.probiotics），默认 GENERAL；与 tags 扁平标签职责分离
     category: str = Field(default="GENERAL", max_length=64)
+    # 原始文档相对存储根路径（上传入审用，纯文本知识项为 None）
+    source_file: Optional[str] = None
 
 
 class KnowledgeItemCreate(KnowledgeItemBase):
@@ -42,6 +44,11 @@ class KnowledgeListResponse(BaseModel):
 
 class KnowledgeApproveRequest(BaseModel):
     approved_by: str = Field(..., min_length=1)
+
+
+class KnowledgeRejectRequest(BaseModel):
+    """驳回 / 下线共用的操作人字段"""
+    operator: str = Field(..., min_length=1)
 
 
 class UnansweredCaptureRequest(BaseModel):

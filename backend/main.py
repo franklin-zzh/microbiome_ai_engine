@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.agent_cs import models as cs_models  # noqa: F401  注册 CsChatLog / SessionState 到 Base
 from app.agent_cs.router import chat_router, wechat_router
@@ -47,6 +49,12 @@ def create_app() -> FastAPI:
     app.include_router(sales_router, prefix="/api/v1")
     app.include_router(wechat_router, prefix="/api/v1")
     app.include_router(wechat_router, prefix="")  # 兼容 https://wx.fmtcloud.cn/wx/msg
+    # 审核后台单页（backend/public/admin）；uploads 不挂静态目录，只走鉴权下载接口
+    app.mount(
+        "/admin",
+        StaticFiles(directory=Path(__file__).resolve().parent / "public" / "admin", html=True),
+        name="admin",
+    )
     return app
 
 
