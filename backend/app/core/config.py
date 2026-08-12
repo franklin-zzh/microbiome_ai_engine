@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     app_name: str = "agent_cs"
 
     debug: bool = False
+    # SQLAlchemy 是否打印 SQL 语句（排障用）。默认关闭，避免后端日志被 SQL 刷屏；
+    # 需要时在 .env 设 SQLALCHEMY_ECHO=true 临时开启，与 DEBUG 解耦。
+    sqlalchemy_echo: bool = False
 
     # ============ MySQL 单库（沿用本地 Docker 部署的 global-mysql8，端口 3306）============
     # mb_ai_engine：统一 schema —— core_*（知识库体系）+ cs_*（客服会话体系 + 销售线索），
@@ -47,12 +50,20 @@ class Settings(BaseSettings):
     # ============ Dify（共享知识库引擎 engine_rag，未来可拆分为独立服务）============
     dify_base_url: str = "http://192.168.110.16:3080/v1"
     dify_api_key: str = ""
+    # Knowledge Service API Key，只允许后端管理 Dataset/Pipeline。
+    # 空值期间回退 DIFY_API_KEY，方便由存量部署平滑迁移；生产应单独配置。
+    dify_knowledge_api_key: str = ""
     # 域 -> 知识库映射（留空 = 未启用，启用前 dataset_id_for_domain 会拒绝该域/形态）
-    cs_dataset_id: str = ""          # CS 问答库（qa_model）
+    cs_qa_dataset_id: str = ""       # CS 问答库（qa_model；同时作为原始文档 Pipeline 的发布目标）
     cs_doc_dataset_id: str = ""      # CS 长文档库（text_model/hierarchical_model，双库预留）
     sales_dataset_id: str = ""       # 销售案例库
     doctor_dataset_id: str = ""      # 医生域独立库（Phase 3 预留）
 
+    # CS 原始文档的 Knowledge Pipeline（FILE -> QA Processor -> Knowledge Base），
+    # 发布目标复用 CS_QA_DATASET_ID（问答库本身启用 Pipeline 即可）。
+    cs_pipeline_file_node_id: str = ""
+    cs_pipeline_version: str = "default"
+    dify_pipeline_timeout_seconds: int = 600
     cs_score_threshold: float = 0.65
 
     # 微信客服配置

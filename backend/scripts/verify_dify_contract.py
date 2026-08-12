@@ -4,7 +4,7 @@
 docs/DIFY-API-CONTRACT.md 中记录的契约（路径 / payload / 状态码 / 异步索引行为）。
 
 用法：
-    1. 根目录 .env 填好 DIFY_API_KEY（Service API 密钥）与 CS_DATASET_ID（任一知识库 ID）
+    1. 根目录 .env 填好 DIFY_API_KEY（Service API 密钥）与 CS_QA_DATASET_ID（任一知识库 ID）
     2. cd backend && .venv\\Scripts\\python.exe scripts\\verify_dify_contract.py
     3. 脚本会创建两个临时文档（qa_model / text_model），轮询索引状态，最后 DELETE 清理；
        全部通过输出 CONTRACT OK，任何一步失败输出真实状态码与响应体
@@ -26,7 +26,7 @@ load_dotenv(ROOT_ENV)
 
 BASE_URL = os.getenv("DIFY_BASE_URL", "").rstrip("/")
 API_KEY = os.getenv("DIFY_API_KEY", "")
-DATASET_ID = os.getenv("CS_DATASET_ID", "")
+DATASET_ID = os.getenv("CS_QA_DATASET_ID", "")
 
 # 1.16.1 知识库文档管理的两类路径（canonical=连字符 / legacy=下划线，均注册）
 CANONICAL_PREFIX = f"/datasets/{DATASET_ID}/documents"
@@ -41,7 +41,7 @@ def log(step: str, resp: httpx.Response, extra: str = "") -> None:
 
 
 def create_by_text(client: httpx.Client, doc_form: str) -> tuple[str, str]:
-    """创建文档，返回 (document_id, batch)。先试 legacy 下划线路径（后端 dify_client 现用），
+    """创建文档，返回 (document_id, batch)。先试 legacy 下划线路径（后端 dify_knowledge_client 契约基准），
     404 则回退 canonical 连字符路径——用于验证 1.16.1 是否仍保留 legacy alias。"""
     payload = {
         "name": f"CONTRACT-TEST-{doc_form}",
@@ -96,7 +96,7 @@ def delete_document(client: httpx.Client, document_id: str) -> None:
 
 def main() -> int:
     if not API_KEY or not DATASET_ID:
-        print("SKIPPED: 根目录 .env 缺少 DIFY_API_KEY / CS_DATASET_ID，无法实测。")
+        print("SKIPPED: 根目录 .env 缺少 DIFY_API_KEY / CS_QA_DATASET_ID，无法实测。")
         print("回填后重跑；当前契约以 docs/DIFY-API-CONTRACT.md（源码核实版）为准。")
         return 0
     if not BASE_URL:

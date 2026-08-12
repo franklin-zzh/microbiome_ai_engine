@@ -137,7 +137,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 
 ### 🛠️ 后端启动与检查 (Backend Run & Lint)
 
-- **启动开发服务**：`cd backend && .venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000`
+- **启动开发服务（一键，自动用 .venv）**：`backend\dev.bat`（双击 / cmd）或 `backend\dev.ps1`（PowerShell）；VSCode 里 Ctrl+Shift+B 选「启动后端 (uvicorn --reload)」。等价手动命令：`cd backend && .venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000`
 - **代码质量检查**：`flake8 backend/` 或 `ruff check backend/`
 - **预期结果**：服务正常在 `http://localhost:8000` 启动，Swagger 文档展示在 `/docs`，`/health` 返回 `{"status":"ok","redis":"ok"}`。
 
@@ -162,9 +162,9 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-07 17:15
+- **最近一次同步时间**：2026-08-12 17:35
 
-- **当前关注的架构焦点**：知识审核闭环任务化（2026-08-07）——① 审核/驳回/下线全部落 `core_sync_tasks` 对账表（outbox：action CREATE/UPDATE/DELETE + 指数退避重试，`process_sync_tasks` 可重放，解决 BackgroundTasks 内存丢任务）；② `sync_status`（NOT_SYNCED/QUEUED/INDEXING/COMPLETED/FAILED/DELETING）与审核 `status`（+REVOKED）分离；③ `reject`/`revoke` 端点 + Dify DELETE 同步（1.16.1 契约冻结见 `docs/DIFY-API-CONTRACT.md`，实测脚本 `backend/scripts/verify_dify_contract.py` 待 DIFY_API_KEY 回填后运行）；④ 审核后台单页 `http://localhost:8000/admin`（登录/录入/列表/详情/通过/驳回/下线/原文档上传下载，文件存 `backend/public/uploads`，仅鉴权下载）；⑤ `dataset_id_for_domain` 映射表化：`CS_DOC_DATASET_ID`（文档库双库预留，未配回落 QA 库）/ `DOCTOR_DATASET_ID`（医生库预留，未配拒绝）。pytest 26/26。下一步：回填 `.env` 的 DIFY_API_KEY/CS_DATASET_ID 后跑契约实测 + 全链路验证。
+- **当前关注的架构焦点**：知识库双形态落地 + 旧链路下线（2026-08-12）——① 旧知识项链路（`core_knowledge_items` 手工录入 + `core_sync_tasks` 对账 outbox + 旧 `dify_client.py`）整体下线：路由/模型/迁移/seed/admin 清理，unanswered/sales-case 保留但不再关联知识项（迁移 `c9d8e7f6a5b4`）；② DOC 知识库（非 QA 文件）：`core_knowledge_documents.doc_form`（qa_model/text_model/hierarchical_model）单选决定目标库，text_model 走 `dify_knowledge_client.create_by_file` 直传（Dify 原生切割，CS_DOC_DATASET_ID=60c9bb5b-...），qa_model 走 Knowledge Pipeline；一个文档一个形态一个库，未配置拒绝发布；③ 客服工作流双库检索：`cs_agent_chatbot.yml` 改为 CS_QA（semantic 0.65）+ CS_DOC（hybrid 0.3）→ merge（code 节点带 source）→ Rerank（bge-reranker-v2-m3，top_n 5）→ LLM；④ 客户端合并为 `app/clients/dify_knowledge_client.py`（直传 + Pipeline + 轮询/segments/删除）。pytest 31/31。下一步：Dify 控制台导入新工作流并配置 rerank 模型；跑 `verify_dify_contract.py` 契约实测。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。
@@ -176,7 +176,7 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
     - [ ] 7. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
     - [ ] 8. 第 3 周：企微微信客服消息解密后落库 + 主动推送、Celery 异步队列（回调验签/解密已提前完成）。
     - [ ] 9. 接通负面情绪计数：`increment_negative_streak` 当前是死代码，"连续负面≥2 转人工"规则未接线（AGENT.md §3.2-3 有定义，P1#7）。
-    - [x] 10. 知识驳回/删除同步删 Dify 文档 + 对账脚本（P1#6，R2）——2026-08-07 落地：reject/revoke 端点 + core_sync_tasks 对账表 + Dify DELETE（1.16.1 契约见 docs/DIFY-API-CONTRACT.md）。
-    - [ ] 11. ⏳ Dify 契约实测：`.env` 回填 DIFY_API_KEY/CS_DATASET_ID 后运行 `backend/scripts/verify_dify_contract.py`（qa_model/text_model 创建-索引-删除全链路 + 路径探测），结果回填 docs/DIFY-API-CONTRACT.md 待实测清单。
-    - [ ] 12. 双库拆分（目标态）：CS_DOC_DATASET_ID 已预留（text_model/hierarchical_model 路由），数据量上来后建 CS_DOC 库 + 工作流双检索节点 + Rerank。
-    - [ ] 13. 同步 worker 化：当前 `sync_approved_knowledge` 内联消费（后台线程），生产可改独立 worker/定时任务调 `process_sync_tasks`。
+    - [x] 10. 知识驳回/删除同步删 Dify 文档 + 对账脚本（P1#6，R2）——2026-08-07 落地：reject/revoke 端点 + core_sync_tasks 对账表 + Dify DELETE（1.16.1 契约见 docs/DIFY-API-CONTRACT.md）；2026-08-12 随旧链路整体下线（迁移 c9d8e7f6a5b4 删表）。
+    - [ ] 11. ⏳ Dify 契约实测：`.env` 回填 DIFY_API_KEY/CS_QA_DATASET_ID 后运行 `backend/scripts/verify_dify_contract.py`（qa_model/text_model 创建-索引-删除全链路 + 路径探测），结果回填 docs/DIFY-API-CONTRACT.md 待实测清单。
+    - [x] 12. 双库拆分（目标态）：2026-08-12 落地——CS_DOC 库已建并配置（60c9bb5b-...），text_model 走 create_by_file 直传；工作流双检索 + Rerank 已设计（`cs_agent_chatbot.yml`，待 Dify 导入）。
+    - [x] 13. 旧知识项链路下线（2026-08-12）：`core_knowledge_items`/`core_sync_tasks` 删表，手工知识项路由移除，CS 知识一律走「原文件 → 文档/版本 → Dify」；销售/doctor 域未来走「聊天记录直接导入」工作流形态（未开发）。

@@ -1,12 +1,16 @@
 ﻿"""知识库域（横切共享，mb_ai_engine.core_*）：REST 路由
 
-- router（/knowledge）：知识项提交 / 销售案例提交 / 原始文档上传
-- admin_router（/admin）：知识审核与列表 / 原始文档下载
+- router（/knowledge）：CS 原始文档上传（asset/document/version 生命周期）与销售案例提交
+- admin_router（/admin）：CS 文档审核 / 下载 / 列表
 - cs_router（/cs）：未解答问题捕获（客服缺口反哺知识库，URL 前缀兼容旧版）
+
+旧知识项链路（core_knowledge_items 手工录入 + core_sync_tasks 同步对账）已于 2026-08-12 下线，
+CS 知识一律走「原文件 → 逻辑文档/版本 → Dify（Pipeline 或 create_by_file）」链路。
 """
+import hashlib
 import uuid
+from datetime import datetime
 from pathlib import Path
-from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -17,9 +21,10 @@ from app.core.database import get_db
 from app.core.logging import structured_log
 from app.core.security import require_admin, require_internal_key
 from app.knowledge.models import (
-    KnowledgeItem,
-    KnowledgeSourceType,
-    KnowledgeStatus,
+    KnowledgeAsset,
+    KnowledgeDocument,
+    KnowledgeDocumentVersion,
+    KnowledgeVersionStatus,
     SalesCase,
     SalesCaseStatus,
     UnansweredQuestion,
@@ -27,17 +32,19 @@ from app.knowledge.models import (
 )
 from app.knowledge.schemas import (
     GenericMessageResponse,
-    KnowledgeApproveRequest,
-    KnowledgeItemCreate,
-    KnowledgeItemOut,
-    KnowledgeListResponse,
-    KnowledgeRejectRequest,
+    KnowledgeAssetOut,
+    KnowledgeDocumentCreate,
+    KnowledgeDocumentListResponse,
+    KnowledgeDocumentOut,
+    KnowledgeDocumentReviewRequest,
+    KnowledgeDocumentVersionCreate,
+    KnowledgeDocumentVersionOut,
     SalesCaseOut,
     SalesCaseSubmitRequest,
     UnansweredCaptureRequest,
     UnansweredQuestionOut,
 )
-from app.knowledge.services import sync_approved_knowledge, sync_removed_knowledge
+from app.knowledge.document_services import asset_file_path, create_document_version, publish_document_version, revoke_document_version
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -52,20 +59,22 @@ MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
 settings = get_settings()
 
 
-# ============ 原始文档上传/下载 ============
 
 
-@router.post("/upload", dependencies=[Depends(require_admin)])
-def upload_knowledge_file(file: UploadFile = File(...)):
-    """上传原始文档（审核时供人工查看）。返回相对路径，提交知识项时写入 source_file。"""
+# ============ CS 原始文档 -> 版本 -> Dify Knowledge Pipeline ============
+
+
+@router.post("/documents/assets", response_model=KnowledgeAssetOut, dependencies=[Depends(require_admin)])
+def upload_cs_document_asset(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """保存不可变原文件并登记资产；此操作不会调用 Dify、不会创建线上知识。"""
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext or 'unknown'}")
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    # 服务端生成文件名（uuid），不信任用户文件名，杜绝路径穿越
     name = f"{uuid.uuid4().hex}{ext}"
     dest = UPLOAD_DIR / name
+    digest = hashlib.sha256()
     size = 0
     try:
         with dest.open("wb") as out:
@@ -73,67 +82,241 @@ def upload_knowledge_file(file: UploadFile = File(...)):
                 size += len(chunk)
                 if size > MAX_UPLOAD_SIZE:
                     raise HTTPException(status_code=413, detail="File too large (max 20MB)")
+                digest.update(chunk)
                 out.write(chunk)
     except Exception:
         dest.unlink(missing_ok=True)
         raise
 
-    structured_log(event="knowledge_file_uploaded", status="SUCCESS", extra={"size": size, "ext": ext})
-    return {"filename": file.filename, "path": f"uploads/{name}", "size": size}
+    asset = KnowledgeAsset(
+        original_filename=file.filename or name,
+        mime_type=file.content_type,
+        size_bytes=size,
+        sha256=digest.hexdigest(),
+        storage_provider="LOCAL",
+        object_key=f"uploads/{name}",
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    structured_log(
+        event="cs_document_asset_uploaded",
+        item_id=asset.id,
+        domain="CS",
+        status="SUCCESS",
+        extra={"filename": asset.original_filename, "size": asset.size_bytes, "sha256": asset.sha256},
+    )
+    return asset
 
 
-@admin_router.get("/knowledge/{item_id}/source", dependencies=[Depends(require_admin)])
-def download_knowledge_source(item_id: int, db: Session = Depends(get_db)):
-    """下载知识项关联的原始文档（鉴权下载；uploads 目录不直接暴露静态访问）。"""
-    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Knowledge item not found")
-    if not item.source_file:
-        raise HTTPException(status_code=404, detail="No source file attached")
-
-    # 路径穿越防护：resolve 后必须仍位于 PUBLIC_ROOT 内
-    path = (PUBLIC_ROOT / item.source_file).resolve()
-    if not path.is_relative_to(PUBLIC_ROOT.resolve()) or not path.is_file():
-        raise HTTPException(status_code=404, detail="Source file not found")
-    return FileResponse(path, filename=Path(item.source_file).name)
+@admin_router.get("/knowledge/assets/{asset_id}/source", dependencies=[Depends(require_admin)])
+def download_cs_document_asset(asset_id: int, db: Session = Depends(get_db)):
+    asset = db.query(KnowledgeAsset).filter(KnowledgeAsset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Knowledge asset not found")
+    try:
+        return FileResponse(asset_file_path(asset), filename=asset.original_filename, media_type=asset.mime_type)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(status_code=404, detail="Source asset not found") from None
 
 
-# ============ 知识项提交 ============
-
-
-@router.post("/submit", response_model=KnowledgeItemOut, dependencies=[Depends(require_admin)])
-def submit_knowledge(
-    body: KnowledgeItemCreate,
-    db: Session = Depends(get_db),
-):
-    """提交一条待审核知识项（仅登录用户；P0 单 admin 角色，多角色见 R5）"""
-    item = KnowledgeItem(
-        domain=body.domain,
-        source_type=body.source_type,
-        status=KnowledgeStatus.PENDING,
-        category=body.category,
+@router.post("/documents", response_model=KnowledgeDocumentOut, dependencies=[Depends(require_admin)])
+def create_cs_document(body: KnowledgeDocumentCreate, db: Session = Depends(get_db)):
+    """创建逻辑文档及 V1.0 待审核版本；版本不是全局知识库版本号。"""
+    asset = db.query(KnowledgeAsset).filter(KnowledgeAsset.id == body.asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Knowledge asset not found")
+    document = KnowledgeDocument(
+        domain="CS",
         title=body.title,
-        question=body.question,
-        answer=body.answer,
-        tags=body.tags or [],
-        source_file=body.source_file,
-        cs_gap_id=body.cs_gap_id,
-        sales_case_id=body.sales_case_id,
+        category=body.category,
+        doc_form=body.doc_form,
+        tags=body.tags,
         created_by=body.created_by,
     )
-    db.add(item)
+    db.add(document)
     db.commit()
-    db.refresh(item)
-
-    structured_log(
-        event="knowledge_submitted",
-        item_id=item.id,
-        domain=item.domain.value,
-        source_type=item.source_type.value,
-        status="PENDING",
-        extra={"created_by": body.created_by},
+    db.refresh(document)
+    create_document_version(
+        db,
+        document,
+        asset,
+        title=body.title,
+        category=body.category,
+        tags=body.tags,
+        pipeline_version=body.pipeline_version or settings.cs_pipeline_version,
+        created_by=body.created_by,
     )
-    return item
+    db.refresh(document)
+    return document
+
+
+@admin_router.post("/knowledge/documents/{document_id}/versions", response_model=KnowledgeDocumentVersionOut, dependencies=[Depends(require_admin)])
+def create_cs_document_update(
+    document_id: int,
+    body: KnowledgeDocumentVersionCreate,
+    db: Session = Depends(get_db),
+):
+    """从稳定 document_id 新建下一版本，绝不依据文件名或内容相似度猜旧版。"""
+    document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    asset = db.query(KnowledgeAsset).filter(KnowledgeAsset.id == body.asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Knowledge asset not found")
+    version = create_document_version(
+        db,
+        document,
+        asset,
+        title=body.title or document.title,
+        category=body.category or document.category,
+        tags=body.tags if body.tags is not None else (document.tags or []),
+        pipeline_version=body.pipeline_version or settings.cs_pipeline_version,
+        created_by=body.created_by,
+    )
+    return version
+
+
+@admin_router.get("/knowledge/documents", response_model=KnowledgeDocumentListResponse, dependencies=[Depends(require_admin)])
+def list_cs_documents(
+    version_status: str = Query(None, pattern="^(DRAFT|PENDING|APPROVED|PUBLISHED|SUPERSEDED|REJECTED|REVOKED)$"),
+    category: str = Query(None, min_length=1, max_length=64),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(KnowledgeDocument).filter(KnowledgeDocument.domain == "CS")
+    if category:
+        query = query.filter(KnowledgeDocument.category == category)
+    if version_status:
+        query = query.join(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.status == version_status).distinct()
+    total = query.count()
+    items = query.order_by(KnowledgeDocument.updated_at.desc()).offset(skip).limit(limit).all()
+    return KnowledgeDocumentListResponse(total=total, items=[KnowledgeDocumentOut.model_validate(item) for item in items])
+
+
+@admin_router.get("/knowledge/documents/{document_id}", response_model=KnowledgeDocumentOut, dependencies=[Depends(require_admin)])
+def get_cs_document(document_id: int, db: Session = Depends(get_db)):
+    document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    return document
+
+
+@admin_router.post("/knowledge/document-versions/{version_id}/approve", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def approve_cs_document_version(
+    version_id: int,
+    body: KnowledgeDocumentReviewRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    version = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Knowledge document version not found")
+    if version.status not in {KnowledgeVersionStatus.DRAFT, KnowledgeVersionStatus.PENDING, KnowledgeVersionStatus.APPROVED}:
+        raise HTTPException(status_code=400, detail=f"Version cannot be approved from {version.status.value}")
+    version.status = KnowledgeVersionStatus.APPROVED
+    version.reviewed_by = body.operator
+    version.review_note = body.review_note
+    version.reviewed_at = datetime.now()
+    db.commit()
+    # 审核结论与发布完成分离：后台任务仅驱动 Pipeline 投影。
+    background_tasks.add_task(publish_document_version, version.id)
+    return GenericMessageResponse(message="Approved; Dify Pipeline publish scheduled")
+
+
+@admin_router.post("/knowledge/document-versions/{version_id}/retry-publish", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def retry_cs_document_publish(
+    version_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """重试一个已审核但 Dify Pipeline 失败的版本，不会改写其内容快照。"""
+    version = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Knowledge document version not found")
+    if version.status != KnowledgeVersionStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Only APPROVED versions can retry publication")
+    background_tasks.add_task(publish_document_version, version.id)
+    return GenericMessageResponse(message="Dify Pipeline retry scheduled")
+
+
+@admin_router.post("/knowledge/document-versions/{version_id}/reject", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def reject_cs_document_version(
+    version_id: int,
+    body: KnowledgeDocumentReviewRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    version = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Knowledge document version not found")
+    if version.status == KnowledgeVersionStatus.PUBLISHED:
+        raise HTTPException(status_code=400, detail="Published versions must be revoked, not rejected")
+    version.status = KnowledgeVersionStatus.REJECTED
+    version.reviewed_by = body.operator
+    version.review_note = body.review_note
+    version.reviewed_at = datetime.now()
+    db.commit()
+    if version.publish_targets:
+        background_tasks.add_task(revoke_document_version, version.id, KnowledgeVersionStatus.REJECTED)
+    return GenericMessageResponse(message="Rejected")
+
+
+@admin_router.post("/knowledge/document-versions/{version_id}/revoke", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def revoke_cs_document_version(
+    version_id: int,
+    body: KnowledgeDocumentReviewRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    version = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == version_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Knowledge document version not found")
+    if version.status != KnowledgeVersionStatus.PUBLISHED:
+        raise HTTPException(status_code=400, detail="Only PUBLISHED versions can be revoked")
+    version.reviewed_by = body.operator
+    version.review_note = body.review_note
+    db.commit()
+    background_tasks.add_task(revoke_document_version, version.id)
+    return GenericMessageResponse(message="Revocation scheduled")
+
+
+@admin_router.get("/knowledge/document-versions/{version_id}/diff", dependencies=[Depends(require_admin)])
+def diff_cs_document_versions(
+    version_id: int,
+    against_version_id: int = Query(..., gt=0),
+    db: Session = Depends(get_db),
+):
+    """精确块差异：按保存的 QA/文本哈希比较，不依赖文件名或 Dify 搜索猜关联。"""
+    current = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == version_id).first()
+    against = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == against_version_id).first()
+    if not current or not against or current.document_id != against.document_id:
+        raise HTTPException(status_code=400, detail="Versions must belong to the same knowledge document")
+
+    def block_map(version: KnowledgeDocumentVersion):
+        return {
+            block.content_sha256: {
+                "segment_id": block.dify_segment_id,
+                "type": block.block_type.value,
+                "question": block.question,
+                "answer": block.answer,
+                "content": block.content,
+            }
+            for target in version.publish_targets
+            for block in target.blocks
+        }
+
+    left, right = block_map(current), block_map(against)
+    return {
+        "version_id": current.id,
+        "against_version_id": against.id,
+        "added": [left[key] for key in left.keys() - right.keys()],
+        "removed": [right[key] for key in right.keys() - left.keys()],
+        "unchanged_count": len(left.keys() & right.keys()),
+    }
+
+
 
 
 @router.post("/sales-case", response_model=SalesCaseOut, dependencies=[Depends(require_admin)])
@@ -156,159 +339,19 @@ def submit_sales_case(
     db.commit()
     db.refresh(case)
 
-    # 同时生成一条待审核的 SALES 知识项
-    summary = body.extracted_summary or {}
-    title = f"销售案例：{body.customer_type or '未知类型'}"
-    answer = (
-        f"【客户类型】{body.customer_type or '待补充'}\n"
-        f"【核心抗拒点】{body.core_objection or '待补充'}\n"
-        f"【成交破阻逻辑】{body.breakthrough_logic or '待补充'}\n"
-        f"【推荐跟进话术】{body.follow_up_script or '待补充'}"
-    )
-    item = KnowledgeItem(
-        domain="SALES",
-        source_type=KnowledgeSourceType.SALES_CASE,
-        status=KnowledgeStatus.PENDING,
-        title=title,
-        question=None,
-        answer=answer,
-        tags=["销售案例", body.customer_type] if body.customer_type else ["销售案例"],
-        sales_case_id=case.id,
-        created_by=body.submitted_by,
-    )
-    db.add(item)
-    db.commit()
-    db.refresh(case)
-
+    # 旧版此处会同步生成一条待审核的 SALES 知识项；旧知识项链路已下线（2026-08-12），
+    # 销售域后续规划为「聊天记录直接导入」工作流形态，此处仅保留案例原始记录。
     structured_log(
         event="sales_case_submitted",
         item_id=case.id,
         domain="SALES",
         source_type="SALES_CASE",
         status="PENDING",
-        extra={"submitted_by": body.submitted_by, "knowledge_item_id": item.id},
+        extra={"submitted_by": body.submitted_by},
     )
     return case
 
 
-# ============ 知识审核与列表（管理后台） ============
-
-
-@admin_router.post("/knowledge/{item_id}/approve", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
-def approve_knowledge(
-    item_id: int,
-    body: KnowledgeApproveRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Knowledge item not found")
-    if item.status == KnowledgeStatus.APPROVED:
-        return GenericMessageResponse(message="Item already approved")
-
-    item.approve(approved_by=body.approved_by)
-    db.commit()
-    db.refresh(item)
-
-    structured_log(
-        event="knowledge_approved",
-        item_id=item.id,
-        domain=item.domain.value,
-        source_type=item.source_type.value,
-        status="APPROVED",
-        extra={"approved_by": body.approved_by},
-    )
-
-    # 不传请求级 db：后台线程跨请求使用同一 Session 非线程安全，
-    # services 层在 db=None 时自建独立 session（见 sync_approved_knowledge）
-    background_tasks.add_task(sync_approved_knowledge, item.id)
-    return GenericMessageResponse(message="Approved and sync scheduled")
-
-
-@admin_router.post("/knowledge/{item_id}/reject", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
-def reject_knowledge(
-    item_id: int,
-    body: KnowledgeRejectRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    """驳回知识项（PENDING/DRAFT -> REJECTED）。若已同步过，异步删除 Dify 文档。"""
-    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Knowledge item not found")
-    if item.status == KnowledgeStatus.REJECTED:
-        return GenericMessageResponse(message="Item already rejected")
-
-    item.reject(rejected_by=body.operator)
-    db.commit()
-    db.refresh(item)
-
-    structured_log(
-        event="knowledge_rejected",
-        item_id=item.id,
-        domain=item.domain.value,
-        source_type=item.source_type.value,
-        status="REJECTED",
-        extra={"operator": body.operator, "vector_doc_id": item.vector_doc_id},
-    )
-
-    if item.vector_doc_id:
-        background_tasks.add_task(sync_removed_knowledge, item.id)
-    return GenericMessageResponse(message="Rejected")
-
-
-@admin_router.post("/knowledge/{item_id}/revoke", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
-def revoke_knowledge(
-    item_id: int,
-    body: KnowledgeRejectRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    """下线已上线知识（APPROVED -> REVOKED），异步删除 Dify 文档并清向量引用。"""
-    item = db.query(KnowledgeItem).filter(KnowledgeItem.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Knowledge item not found")
-    if item.status != KnowledgeStatus.APPROVED:
-        raise HTTPException(status_code=400, detail="Only APPROVED items can be revoked")
-
-    item.revoke(revoked_by=body.operator)
-    db.commit()
-    db.refresh(item)
-
-    structured_log(
-        event="knowledge_revoked",
-        item_id=item.id,
-        domain=item.domain.value,
-        source_type=item.source_type.value,
-        status="REVOKED",
-        extra={"operator": body.operator, "vector_doc_id": item.vector_doc_id},
-    )
-
-    if item.vector_doc_id:
-        background_tasks.add_task(sync_removed_knowledge, item.id)
-    return GenericMessageResponse(message="Revoked, doc deletion scheduled")
-
-
-@admin_router.get("/knowledge", response_model=KnowledgeListResponse, dependencies=[Depends(require_admin)])
-def list_knowledge(
-    domain: str = Query(None, pattern="^(CS|SALES|DOCTOR)$"),
-    status: str = Query(None, pattern="^(DRAFT|PENDING|APPROVED|REJECTED|REVOKED)$"),
-    category: str = Query(None, min_length=1, max_length=64),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db),
-):
-    query = db.query(KnowledgeItem)
-    if domain:
-        query = query.filter(KnowledgeItem.domain == domain)
-    if status:
-        query = query.filter(KnowledgeItem.status == status)
-    if category:
-        query = query.filter(KnowledgeItem.category == category)
-    total = query.count()
-    items = query.order_by(KnowledgeItem.created_at.desc()).offset(skip).limit(limit).all()
-    return KnowledgeListResponse(total=total, items=[KnowledgeItemOut.model_validate(i) for i in items])
 
 
 # ============ 未解答问题捕获（客服缺口反哺） ============
@@ -361,12 +404,11 @@ def list_unanswered(
 @cs_router.post("/unanswered/{question_id}/resolve", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
 def resolve_unanswered(
     question_id: int,
-    knowledge_item_id: int = None,
     db: Session = Depends(get_db),
 ):
     record = db.query(UnansweredQuestion).filter(UnansweredQuestion.id == question_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Question not found")
-    record.resolve(knowledge_item_id=knowledge_item_id)
+    record.resolve()
     db.commit()
     return GenericMessageResponse(message="Resolved")

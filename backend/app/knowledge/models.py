@@ -1,6 +1,5 @@
 import enum
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     JSON,
@@ -11,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship
@@ -24,45 +24,218 @@ class KnowledgeDomain(str, enum.Enum):
     DOCTOR = "DOCTOR"
 
 
-class KnowledgeSourceType(str, enum.Enum):
-    MANUAL = "MANUAL"
-    CS_GAP = "CS_GAP"
-    SALES_CASE = "SALES_CASE"
+# ============ CS 文档知识库：事实源、版本和 Dify Pipeline 投影 ============
 
 
-class KnowledgeStatus(str, enum.Enum):
+class KnowledgeDocumentStatus(str, enum.Enum):
+    """逻辑文档的生命周期状态。
+
+    一个逻辑文档（例如《检测报告 FAQ》）只有一个当前线上版本；内容修改会创建
+    新版本，而不是覆盖旧记录。状态由版本状态派生，便于列表检索。
+    """
+
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class KnowledgeVersionStatus(str, enum.Enum):
+    """内容版本生命周期；审核状态和 Dify 发布状态不再混用。"""
+
     DRAFT = "DRAFT"
     PENDING = "PENDING"
-    APPROVED = "APPROVED"
+    APPROVED = "APPROVED"       # 人工审核通过，等待/正在发布
+    PUBLISHED = "PUBLISHED"     # Dify Pipeline 成功且索引完成
+    SUPERSEDED = "SUPERSEDED"   # 被后一已发布版本替代，原记录仍保留
     REJECTED = "REJECTED"
     REVOKED = "REVOKED"
 
 
-class SyncStatus(str, enum.Enum):
-    """知识项与 Dify 的同步状态（技术状态，与审核状态 status 分离）
+class PublishStatus(str, enum.Enum):
+    """Dify 侧的技术状态；它不是人工审核结论。"""
 
-    流转：NOT_SYNCED -> QUEUED -> INDEXING -> COMPLETED | FAILED
-    reject/revoke 时：COMPLETED -> DELETING -> NOT_SYNCED（清 vector_doc_id）
-    """
     NOT_SYNCED = "NOT_SYNCED"
     QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
     INDEXING = "INDEXING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    DELETING = "DELETING"
+    DELETE_PENDING = "DELETE_PENDING"
+    DELETED = "DELETED"
 
 
-class SyncTaskAction(str, enum.Enum):
-    CREATE = "CREATE"
-    UPDATE = "UPDATE"
-    DELETE = "DELETE"
+class KnowledgeBlockType(str, enum.Enum):
+    TEXT = "TEXT"
+    QA = "QA"
 
 
-class SyncTaskStatus(str, enum.Enum):
-    QUEUED = "QUEUED"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
+class KnowledgeDocForm(str, enum.Enum):
+    """文档级「知识库形态」单选（对齐 Dify 契约 §2 的 doc_form 枚举）。
+
+    一个文档 = 一种形态 = 一个目标知识库，绝不双写：
+    - qa_model → CS_QA_DATASET_ID（发布走 Knowledge Pipeline，生成 QA 对）
+    - text_model / hierarchical_model → CS_DOC_DATASET_ID（发布走 create_by_file 直传，Dify 原生切割）
+    """
+
+    QA_MODEL = "qa_model"
+    TEXT_MODEL = "text_model"
+    HIERARCHICAL_MODEL = "hierarchical_model"
+
+
+class KnowledgeAsset(Base):
+    """原始上传文件的不可变元数据。
+
+    文件二进制不落 MySQL。MVP 使用受保护的本地对象路径；将来迁移至 MinIO/OSS
+    时只需替换 storage_provider/bucket/object_key 的存储适配器。
+    """
+
+    __tablename__ = "core_knowledge_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    original_filename = Column(String(255), nullable=False)
+    mime_type = Column(String(128))
+    size_bytes = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    storage_provider = Column(String(32), nullable=False, default="LOCAL")
+    bucket = Column(String(128))
+    object_key = Column(String(512), nullable=False, unique=True)
+    created_by = Column(String(128))
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class KnowledgeDocument(Base):
+    """稳定的逻辑文档标识，不随文件名、正文或 Dify document id 改变。"""
+
+    __tablename__ = "core_knowledge_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(Enum(KnowledgeDomain, name="knowledge_document_domain"), nullable=False, default=KnowledgeDomain.CS)
+    title = Column(String(255), nullable=False)
+    category = Column(String(64), nullable=False, default="GENERAL", server_default="GENERAL", index=True)
+    # 知识库形态（qa_model/text_model/hierarchical_model），发布时决定目标 dataset 与发布路径
+    doc_form = Column(
+        Enum(
+            KnowledgeDocForm,
+            name="knowledge_document_doc_form",
+            # 存储用小写枚举值（qa_model/text_model/hierarchical_model），与 Dify doc_form 契约一致
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+        default=KnowledgeDocForm.QA_MODEL,
+        server_default=KnowledgeDocForm.QA_MODEL.value,
+        index=True,
+    )
+    tags = Column(JSON, default=list)
+    status = Column(
+        Enum(KnowledgeDocumentStatus, name="knowledge_document_status"),
+        nullable=False,
+        default=KnowledgeDocumentStatus.ACTIVE,
+        server_default=KnowledgeDocumentStatus.ACTIVE.value,
+    )
+    current_version_id = Column(Integer)  # 逻辑关联，避免 document/version 的循环外键
+    created_by = Column(String(128))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    versions = relationship(
+        "KnowledgeDocumentVersion",
+        back_populates="document",
+        foreign_keys="KnowledgeDocumentVersion.document_id",
+        order_by="KnowledgeDocumentVersion.revision.asc()",
+    )
+
+
+class KnowledgeDocumentVersion(Base):
+    """一次待审内容快照；revision 自动递增，显示层可渲染成 V1.0、V1.1。"""
+
+    __tablename__ = "core_knowledge_document_versions"
+    __table_args__ = (UniqueConstraint("document_id", "revision", name="uq_knowledge_document_revision"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("core_knowledge_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    revision = Column(Integer, nullable=False)
+    asset_id = Column(Integer, ForeignKey("core_knowledge_assets.id", ondelete="RESTRICT"), nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    # 保存提交时的标题/分类/标签，保证历史审核视图不被逻辑文档后续编辑改写。
+    content_snapshot = Column(JSON, nullable=False, default=dict)
+    pipeline_version = Column(String(64), nullable=False, default="default")
+    status = Column(
+        Enum(KnowledgeVersionStatus, name="knowledge_version_status"),
+        nullable=False,
+        default=KnowledgeVersionStatus.PENDING,
+        server_default=KnowledgeVersionStatus.PENDING.value,
+        index=True,
+    )
+    review_note = Column(Text)
+    reviewed_by = Column(String(128))
+    reviewed_at = Column(DateTime)
+    created_by = Column(String(128))
+    created_at = Column(DateTime, server_default=func.now())
+
+    document = relationship("KnowledgeDocument", back_populates="versions", foreign_keys=[document_id])
+    asset = relationship("KnowledgeAsset", foreign_keys=[asset_id])
+    publish_targets = relationship(
+        "DifyPublishTarget",
+        back_populates="version",
+        foreign_keys="DifyPublishTarget.version_id",
+        order_by="DifyPublishTarget.id.desc()",
+    )
+
+
+class DifyPublishTarget(Base):
+    """一个内容版本到 Dify Dataset/Pipeline 的可重建投影和运行审计。"""
+
+    __tablename__ = "core_dify_publish_targets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version_id = Column(Integer, ForeignKey("core_knowledge_document_versions.id", ondelete="CASCADE"), nullable=False, index=True)
+    dataset_id = Column(String(255), nullable=False)
+    # qa_model 走 Pipeline 时需要 start node；create_by_file 直传路径无此节点，可为空
+    pipeline_start_node_id = Column(String(128))
+    pipeline_version = Column(String(64), nullable=False, default="default")
+    dify_file_id = Column(String(255))
+    pipeline_run_id = Column(String(255))
+    dify_document_id = Column(String(255))
+    status = Column(
+        Enum(PublishStatus, name="dify_publish_status"),
+        nullable=False,
+        default=PublishStatus.NOT_SYNCED,
+        server_default=PublishStatus.NOT_SYNCED.value,
+        index=True,
+    )
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    last_error = Column(Text)
+    run_output = Column(JSON)
+    indexed_at = Column(DateTime)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    version = relationship("KnowledgeDocumentVersion", back_populates="publish_targets", foreign_keys=[version_id])
+    blocks = relationship(
+        "DifyDocumentBlock",
+        back_populates="publish_target",
+        foreign_keys="DifyDocumentBlock.publish_target_id",
+        order_by="DifyDocumentBlock.position.asc()",
+    )
+
+
+class DifyDocumentBlock(Base):
+    """Pipeline 生成后从 Dify 回读的块快照，用于版本差异和可追溯审核。"""
+
+    __tablename__ = "core_dify_document_blocks"
+    __table_args__ = (UniqueConstraint("publish_target_id", "dify_segment_id", name="uq_dify_target_segment"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    publish_target_id = Column(Integer, ForeignKey("core_dify_publish_targets.id", ondelete="CASCADE"), nullable=False, index=True)
+    dify_segment_id = Column(String(255), nullable=False)
+    position = Column(Integer)
+    block_type = Column(Enum(KnowledgeBlockType, name="knowledge_block_type"), nullable=False, default=KnowledgeBlockType.TEXT)
+    content = Column(Text)
+    question = Column(Text)
+    answer = Column(Text)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    publish_target = relationship("DifyPublishTarget", back_populates="blocks", foreign_keys=[publish_target_id])
 
 
 class UnansweredStatus(str, enum.Enum):
@@ -78,91 +251,6 @@ class SalesCaseStatus(str, enum.Enum):
     REJECTED = "REJECTED"
 
 
-class KnowledgeItem(Base):
-    """统一知识库 / 话术库（mb_ai_engine.core_knowledge_items）"""
-    __tablename__ = "core_knowledge_items"
-
-    id = Column(Integer, primary_key=True, index=True)
-    domain = Column(Enum(KnowledgeDomain, name="knowledge_domain"), nullable=False, default=KnowledgeDomain.CS)
-    source_type = Column(Enum(KnowledgeSourceType, name="knowledge_source_type"), nullable=False, default=KnowledgeSourceType.MANUAL)
-    status = Column(Enum(KnowledgeStatus, name="knowledge_status"), nullable=False, default=KnowledgeStatus.PENDING)
-    # 主分类（强规范枚举/路径，如 product.probiotics），与 tags（扁平标签）职责分离，支持索引筛选
-    category = Column(String(64), nullable=False, default="GENERAL", server_default="GENERAL", index=True)
-
-    title = Column(String(255), nullable=False)
-    question = Column(Text)
-    answer = Column(Text, nullable=False)
-    tags = Column(JSON, default=list)
-
-    cs_gap_id = Column(Integer, ForeignKey("core_unanswered_questions.id", ondelete="SET NULL"))
-    sales_case_id = Column(Integer, ForeignKey("core_sales_cases.id", ondelete="SET NULL"))
-
-    vector_doc_id = Column(String(255))
-    # ---- 同步状态（与 status 审核状态分离：status 由人决定，sync_status 由系统决定）----
-    sync_status = Column(
-        Enum(SyncStatus, name="sync_status"),
-        nullable=False,
-        default=SyncStatus.NOT_SYNCED,
-        server_default=SyncStatus.NOT_SYNCED.value,
-    )
-    sync_attempts = Column(Integer, nullable=False, default=0, server_default="0")
-    last_sync_error = Column(Text)
-    # 原始文档（上传入审）相对存储根目录的路径；纯文本知识项为 NULL
-    source_file = Column(String(512))
-
-    created_by = Column(String(128))
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-    approved_at = Column(DateTime)
-    approved_by = Column(String(128))
-
-    cs_gap = relationship("UnansweredQuestion", foreign_keys=[cs_gap_id])
-    sales_case = relationship("SalesCase", foreign_keys=[sales_case_id])
-
-    def approve(self, approved_by: str) -> None:
-        self.status = KnowledgeStatus.APPROVED
-        self.approved_by = approved_by
-        self.approved_at = datetime.now()
-
-    def reject(self, rejected_by: str) -> None:
-        self.status = KnowledgeStatus.REJECTED
-        self.approved_by = rejected_by
-        self.approved_at = datetime.now()
-
-    def revoke(self, revoked_by: str) -> None:
-        self.status = KnowledgeStatus.REVOKED
-        self.approved_by = revoked_by
-        self.approved_at = datetime.now()
-
-
-class SyncTask(Base):
-    """Dify 同步对账任务（outbox：审核/驳回动作 -> 异步落 Dify）
-
-    - 由审核/驳回/下线接口注册（QUEUED），后台 worker 取出执行；
-    - 失败保留 FAILED + next_retry_at，支持重试（幂等）；
-    - 每知识项最多一条进行中的任务（service 层按 item_id+status 去重）。
-    """
-    __tablename__ = "core_sync_tasks"
-
-    id = Column(Integer, primary_key=True, index=True)
-    item_id = Column(Integer, ForeignKey("core_knowledge_items.id", ondelete="CASCADE"), nullable=False, index=True)
-    action = Column(Enum(SyncTaskAction, name="sync_task_action"), nullable=False, default=SyncTaskAction.CREATE)
-    status = Column(
-        Enum(SyncTaskStatus, name="sync_task_status"),
-        nullable=False,
-        default=SyncTaskStatus.QUEUED,
-        server_default=SyncTaskStatus.QUEUED.value,
-    )
-    attempts = Column(Integer, nullable=False, default=0, server_default="0")
-    max_attempts = Column(Integer, nullable=False, default=5, server_default="5")
-    next_retry_at = Column(DateTime)
-    last_error = Column(Text)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    item = relationship("KnowledgeItem", foreign_keys=[item_id])
-
-
 class UnansweredQuestion(Base):
     """客服未解答问题捕获（mb_ai_engine.core_unanswered_questions）"""
     __tablename__ = "core_unanswered_questions"
@@ -174,17 +262,13 @@ class UnansweredQuestion(Base):
     match_score = Column(String(10))  # 保留小数位文本，避免精度问题
     status = Column(Enum(UnansweredStatus, name="unanswered_status"), nullable=False, default=UnansweredStatus.OPEN)
 
-    knowledge_item_id = Column(Integer, ForeignKey("core_knowledge_items.id", ondelete="SET NULL"))
-
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     resolved_at = Column(DateTime)
 
-    def resolve(self, knowledge_item_id: Optional[int] = None) -> None:
+    def resolve(self) -> None:
         self.status = UnansweredStatus.RESOLVED
         self.resolved_at = datetime.now()
-        if knowledge_item_id:
-            self.knowledge_item_id = knowledge_item_id
 
 
 class SalesCase(Base):
@@ -202,7 +286,6 @@ class SalesCase(Base):
     extracted_summary = Column(JSON)
 
     status = Column(Enum(SalesCaseStatus, name="sales_case_status"), nullable=False, default=SalesCaseStatus.PENDING)
-    knowledge_item_id = Column(Integer, ForeignKey("core_knowledge_items.id", ondelete="SET NULL"))
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

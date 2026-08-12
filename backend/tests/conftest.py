@@ -41,8 +41,8 @@ def migrated_test_db():
     from app.knowledge import models  # noqa: F401  注册 core_* 表
 
     engine = create_engine(settings.test_database_url)
-    # core 三表存在循环外键（knowledge_items <-> unanswered_questions/sales_cases），
-    # SQLAlchemy drop_all 无法为循环 FK 排序，改为关闭外键检查后显式 DROP（旧 setup_module 亦采用此法）
+    # 旧知识项三表已随旧链路下线（core_knowledge_items/core_sync_tasks 已删表）；
+    # 仍关闭外键检查后显式 DROP，保证清库顺序无关（DROP 顺序与建表顺序相反更稳）。
     with engine.begin() as conn:
         conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=0")
         # alembic_version 必须一并删除，否则 upgrade head 会误判已在最新版而跳过建表
@@ -51,10 +51,13 @@ def migrated_test_db():
             "cs_chat_logs",
             "cs_leads_preview",
             "cs_session_state",
-            "core_knowledge_items",
             "core_unanswered_questions",
             "core_sales_cases",
-            "core_sync_tasks",
+            "core_dify_document_blocks",
+            "core_dify_publish_targets",
+            "core_knowledge_document_versions",
+            "core_knowledge_documents",
+            "core_knowledge_assets",
         ):
             conn.exec_driver_sql(f"DROP TABLE IF EXISTS `{table}`")
         conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1")
@@ -72,10 +75,13 @@ def migrated_test_db():
             "cs_chat_logs",
             "cs_leads_preview",
             "cs_session_state",
-            "core_knowledge_items",
             "core_unanswered_questions",
             "core_sales_cases",
-            "core_sync_tasks",
+            "core_dify_document_blocks",
+            "core_dify_publish_targets",
+            "core_knowledge_document_versions",
+            "core_knowledge_documents",
+            "core_knowledge_assets",
         ):
             conn.exec_driver_sql(f"DROP TABLE IF EXISTS `{table}`")
         conn.exec_driver_sql("SET FOREIGN_KEY_CHECKS=1")

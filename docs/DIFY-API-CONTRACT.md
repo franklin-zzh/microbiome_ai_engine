@@ -1,13 +1,17 @@
 # Dify Service API 契约（1.16.1 冻结版）
 
-> 本文档冻结后端 `backend/app/clients/dify_client.py` 与服务器 Dify 1.16.1 之间的
+> 本文档冻结后端 `backend/app/clients/dify_knowledge_client.py` 与服务器 Dify 1.16.1 之间的
 > API 契约。依据：Dify 1.16.1 源码
 > （`api/controllers/service_api/dataset/document.py`、
 > `api/services/entities/knowledge_entities/knowledge_entities.py`）。
 >
 > 实测状态：⏳ 待运行 `backend/scripts/verify_dify_contract.py`（根 `.env` 回填
-> `DIFY_API_KEY` / `CS_DATASET_ID` 后执行）。运行通过后本文档升级为「已实测」。
+> `DIFY_API_KEY` / `CS_QA_DATASET_ID` 后执行）。运行通过后本文档升级为「已实测」。
 > 修改服务器 Dify 版本（大版本升级）时必须重跑该脚本并同步本文档。
+>
+> 写入端双路径（2026-08-12 落地）：`qa_model` 文档经 Knowledge Pipeline
+> （`/datasets/{id}/pipeline/run`，见 dify_knowledge_client.py run_pipeline）；
+> `text_model`/`hierarchical_model` 文档经 `create_by_file` 直传（Dify 原生切割）。
 
 ## 1. 端点总览（Service API，前缀 `{DIFY_BASE_URL}` = `http://192.168.110.16:3080/v1`）
 
@@ -17,7 +21,7 @@
 |---|---|---|---|---|
 | 创建知识库 | POST | `/datasets` | 200 | 建库时定 `indexing_technique` / `retrieval_model` |
 | 文本建文档 | POST | `/datasets/{id}/document/create_by_text`（legacy，后端现用）<br>`/datasets/{id}/documents/create-by-text`（canonical） | 200 | 返回 `document.id` + `batch` |
-| 文件建文档 | POST | `/datasets/{id}/document/create_by_file` | 200 | multipart；`data` 字段为 JSON 字符串 |
+| 文件建文档 | POST | `/datasets/{id}/document/create_by_file` | 200 | multipart；`data` 字段为 JSON 字符串（后端 `dify_knowledge_client.create_by_file` 已实现，CS_DOC 直传路径） |
 | 文档详情 | GET | `/datasets/{id}/documents/{doc_id}` | 200 | 含 `indexing_status` / `display_status` / `doc_form` |
 | 索引状态 | GET | `/datasets/{id}/documents/{doc_id}/indexing-status` | 200 | `indexing_status` + `completed_segments` / `total_segments` |
 | 文本更新 | PUT | `/datasets/{id}/documents/{doc_id}` | 200 | 重新触发索引；`name`+`text` 必填 |
@@ -54,6 +58,8 @@
 ### 关键约束
 
 - `indexing_technique`：**向空知识库添加第一个文档时必填**；之后可省略（继承知识库设置）。
+- `process_rule`：**create_by_file 必填**（实测 1.16.1 缺失返回 400 `invalid_param "process_rule is required."`；
+  create_by_text 省略不报错）。`{"mode": "automatic"}` = Dify 默认切分规则，custom/hierarchical 可覆盖。
 - `doc_form` 枚举仅 `text_model` / `hierarchical_model` / `qa_model`（`DocForm` 校验，
   非法值 400 `invalid_param`）。
 - `retrieval_mode` **不是** create_by_text 的字段（pydantic 忽略未知字段，不报错但无效）；
@@ -87,16 +93,17 @@
 
 ## 5. 检索契约（读取端，工作流知识检索节点）
 
-- 工作流内知识检索节点（`cs_agent_chatbot.yml`）：`dataset: CS_KB`，
-  `retrieval_mode: semantic`，`top_k: 3`，`score_threshold: 0.65`——这是**读取端**配置，
-  与写入端 `doc_form` 解耦：qa_model 与 text_model 文档可共存于同一知识库并被同一检索节点召回。
-- 双库目标态（CS_FAQ_Dataset + CS_DOC_Dataset + Rerank）仅需新增检索节点与数据集，
-  写入端 payload 结构不变（只换 `dataset_id` 与 `doc_form`）。
+- 工作流内知识检索节点（`cs_agent_chatbot.yml`）：`dataset: CS_QA`（semantic，top_k 3，threshold 0.65）
+  + `dataset: CS_DOC`（hybrid，top_k 5，threshold 0.3）双库检索，合并后经 rerank 节点精排
+  （`bge-reranker-v2-m3`，需 Dify 模型供应商配置）——这是**读取端**配置，
+  与写入端 `doc_form` 解耦：qa_model 与 text_model 文档分库存放，由各自检索节点召回。
+- 双库已落地（2026-08-12）：写入端 payload 结构不变，只换 `dataset_id` 与 `doc_form`；
+  目标库未配置时拒绝发布（不回落另一库，避免 QA 与文本混库）。
 
 ## 6. 待实测确认项（脚本输出回填）
 
 - [ ] legacy 下划线路径是否仍可用（后端保持 `document/create_by_text`）
 - [ ] `qa_model` 实际索引耗时与 `indexing_status` 流转
-- [ ] `text_model` 实际索引耗时与流转
+- [ ] `text_model` 实际索引耗时与流转（create_by_file 直传路径，CS_DOC 库）
 - [ ] DELETE 后 GET 返回 404 的确认
 - [ ] `doc_language: Chinese` 对切分的影响（对比 English 默认值）

@@ -35,9 +35,9 @@ client = TestClient(app)
 
 
 def test_admin_endpoints_reject_anonymous():
-    """无 token 访问敏感接口（知识审核 / 对话日志 / 销售线索）一律 401"""
+    """无 token 访问敏感接口（知识文档审核 / 对话日志 / 销售线索）一律 401"""
     for url in (
-        "/api/v1/admin/knowledge",
+        "/api/v1/admin/knowledge/documents",
         "/api/v1/chat/logs",
         "/api/v1/chat/leads",
         "/api/v1/cs/unanswered",
@@ -59,11 +59,11 @@ def test_login_failure_and_success():
 
     # 带 token 后放行
     headers = {"Authorization": f"Bearer {data['access_token']}"}
-    assert client.get("/api/v1/admin/knowledge", headers=headers).status_code == 200
+    assert client.get("/api/v1/admin/knowledge/documents", headers=headers).status_code == 200
 
 
 def test_invalid_token_rejected():
-    r = client.get("/api/v1/admin/knowledge", headers={"Authorization": "Bearer not-a-jwt"})
+    r = client.get("/api/v1/admin/knowledge/documents", headers={"Authorization": "Bearer not-a-jwt"})
     assert r.status_code == 401
 
 

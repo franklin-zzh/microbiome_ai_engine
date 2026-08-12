@@ -139,7 +139,7 @@ docker compose -f docker-compose.dify.yml ps
 ```ini
 DIFY_BASE_URL=http://192.168.110.16:5081/v1
 DIFY_API_KEY=<在 Dify 控制台创建应用后拿到的 API Key>
-CS_DATASET_ID=<控制台创建 CS_KB 知识库的 ID>
+CS_QA_DATASET_ID=<控制台创建 CS_KB 知识库的 ID>
 SALES_DATASET_ID=<控制台创建 Sales_KB 知识库的 ID>
 ```
 
@@ -165,7 +165,7 @@ netsh advfirewall firewall add rule name="agent_cs backend 8000" dir=in action=a
 
 ```bash
 # ① 本地 backend 能否调服务器 Dify API
-curl http://192.168.110.16:5081/v1/datasets/{CS_DATASET_ID} \
+curl http://192.168.110.16:5081/v1/datasets/{CS_QA_DATASET_ID} \
      -H "Authorization: Bearer $DIFY_API_KEY"
 
 # ② 本地跑一次知识审核同步(APPROVED → BackgroundTasks 同步 Dify),看 backend 日志 dify_sync_success

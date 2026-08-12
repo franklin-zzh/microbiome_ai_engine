@@ -12,7 +12,7 @@ from app.agent_sales.router import router as sales_router
 from app.core.auth_router import router as auth_router
 from app.core.config import get_settings
 from app.core.redis import redis_health
-from app.knowledge import models as knowledge_models  # noqa: F401  注册 KnowledgeItem 等到 Base
+from app.knowledge import models as knowledge_models  # noqa: F401  注册 core_* 表（CS 文档五表等）到 Base
 from app.knowledge.router import admin_router, cs_router, router as knowledge_router
 
 settings = get_settings()

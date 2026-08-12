@@ -14,7 +14,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
+          memory: 1g
     ports:
       - "8000:8000"
     environment:
@@ -25,7 +25,8 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD 未配置(见 .env.example)}@host.docker.internal:6380/3
       - DIFY_BASE_URL=${DIFY_BASE_URL}
       - DIFY_API_KEY=${DIFY_API_KEY}
-      - CS_DATASET_ID=${CS_DATASET_ID}
+      - DIFY_KNOWLEDGE_API_KEY=${DIFY_KNOWLEDGE_API_KEY}
+      - CS_QA_DATASET_ID=${CS_QA_DATASET_ID}
       - SALES_DATASET_ID=${SALES_DATASET_ID}
       - WXKF_CORP_ID=${WXKF_CORP_ID}
       - WXKF_SECRET=${WXKF_SECRET}

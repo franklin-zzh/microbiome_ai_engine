@@ -1,5 +1,10 @@
-# 客服 Agent 工作流 (CS Agent Chatbot)
+# 客服 Agent 工作流 (CS Agent Chatbot) —— 双库检索 + Rerank
 # 导入方式：Dify -> 创建应用 -> 导入 DSL（如需实际导入请根据 Dify 当前版本导出空模板后替换本文件字段）
+#
+# 知识库双库利用（2026-08-12 起）：
+# - CS_QA（问答库，qa_model / Knowledge Pipeline 生成）：语义检索，精确回答客服 FAQ
+# - CS_DOC（长文档库，text_model / create_by_file 原生切割）：hybrid 检索，覆盖公司文档/手册等长文
+# 两路结果合并后经 Rerank 排序，由 answer_llm 统一作答；高分缺失才转人工。
 
 app:
   name: 肠道健康客服助手
@@ -7,8 +12,9 @@ app:
   icon: 🤖
 
 description: |
-  挂载 CS_KB 知识库，回答肠菌检测/调养客服问题。
-  当检索匹配分 < 0.65 或命中高风险关键词时，触发转人工并回调后端捕获未解答问题。
+  挂载 CS_QA + CS_DOC 双知识库，回答肠菌检测/调养客服问题。
+  QA 库语义检索 + DOC 库混合检索 -> Rerank 重排 -> LLM 作答；
+  检索为空或命中高风险关键词时，触发转人工并回调后端捕获未解答问题。
 
 environment_variables:
   - name: BACKEND_BASE_URL
@@ -28,7 +34,7 @@ workflow:
         type: string
         description: 用户输入
 
-  # ========== 2. 高风险关键词检查（可选前置护栏） ==========
+  # ========== 2. 高风险关键词检查（前置护栏） ==========
   - node_id: risk_guard
     type: llm
     model: DeepSeek-V3
@@ -49,7 +55,7 @@ workflow:
       - if: "{{#risk_guard.risk_flag#}} == 'true'"
         to: risk_handoff
       - else:
-        to: knowledge_retrieval
+        to: knowledge_retrieval_qa
 
   # ========== 3a. 高风险转人工话术 + 回调 ==========
   - node_id: risk_handoff
@@ -71,10 +77,11 @@ workflow:
       context:
         channel: dify_cs_agent
 
-  # ========== 4. 知识检索 CS_KB ==========
-  - node_id: knowledge_retrieval
+  # ========== 4. 双库检索 ==========
+  # 4a. QA 问答库：语义检索，精确问答（Pipeline 生成的高质量 QA 对）
+  - node_id: knowledge_retrieval_qa
     type: knowledge_retrieval
-    dataset: CS_KB
+    dataset: CS_QA
     retrieval_mode: semantic
     top_k: 3
     score_threshold: 0.65
@@ -83,16 +90,74 @@ workflow:
       - name: result
         type: array
 
-  # ========== 5. 置信度分支 ==========
+  # 4b. DOC 长文档库：hybrid 检索（全文+语义），覆盖公司文档/产品手册等长文；
+  #     阈值放宽，交给 Rerank 精排
+  - node_id: knowledge_retrieval_doc
+    type: knowledge_retrieval
+    dataset: CS_DOC
+    retrieval_mode: hybrid
+    top_k: 5
+    score_threshold: 0.3
+    query: "{{#start.query#}}"
+    outputs:
+      - name: result
+        type: array
+
+  # ========== 4c. 合并两路结果（带来源标识，供 Rerank/回答引用） ==========
+  - node_id: merge_docs
+    type: code
+    code_language: python3
+    code: |
+      def main(query: str, qa_docs: list, doc_docs: list) -> dict:
+          merged = []
+          for d in qa_docs:
+              merged.append({"content": d.get("content") or d.get("title", ""),
+                             "title": d.get("title", ""),
+                             "score": d.get("score", 0.0),
+                             "source": "CS_QA"})
+          for d in doc_docs:
+              merged.append({"content": d.get("content") or d.get("title", ""),
+                             "title": d.get("title", ""),
+                             "score": d.get("score", 0.0),
+                             "source": "CS_DOC"})
+          return {"merged": merged}
+    inputs:
+      - name: query
+        value: "{{#start.query#}}"
+        type: string
+      - name: qa_docs
+        value: "{{#knowledge_retrieval_qa.result#}}"
+        type: array
+      - name: doc_docs
+        value: "{{#knowledge_retrieval_doc.result#}}"
+        type: array
+    outputs:
+      - name: merged
+        type: array
+
+  # ========== 5. Rerank 精排 ==========
+  # 前置条件：Dify「模型供应商」需配置 rerank 模型（如 bge-reranker-v2-m3 / bge-reranker-large）
+  - node_id: rerank
+    type: rerank
+    model: bge-reranker-v2-m3
+    query: "{{#start.query#}}"
+    documents: "{{#merge_docs.merged#}}"
+    top_n: 5
+    score_threshold: 0.3
+    outputs:
+      - name: result
+        type: array
+
+  # ========== 6. 置信度分支（基于 Rerank 后结果） ==========
   - node_id: score_branch
     type: condition
     conditions:
-      - if: "{{#knowledge_retrieval.result#}}.length > 0"
+      - if: "{{#rerank.result#}}.length > 0"
         to: answer_llm
       - else:
         to: fallback_handoff
 
-  # ========== 6. 正常回答 LLM ==========
+  # ========== 7. 正常回答 LLM ==========
   - node_id: answer_llm
     type: llm
     model: DeepSeek-V3
@@ -101,13 +166,14 @@ workflow:
     prompt: |
       用户问题：{{#start.query#}}
 
-      检索到的参考内容：
-      {{#knowledge_retrieval.result#}}
+      检索到的参考内容（Rerank 后按相关度排序）：
+      {{#rerank.result#}}
 
       请基于参考内容生成回答，不要添加未在知识库中出现的信息。
+      QA 知识库（CS_QA）中的问答对优先作为标准话术；DOC 知识库（CS_DOC）内容用于补充细节。
       如果参考内容无法回答，请输出“我无法确定”并建议转人工。
 
-  # ========== 7. 低置信度兜底：回调 + 话术 ==========
+  # ========== 8. 低置信度兜底：回调 + 话术 ==========
   - node_id: fallback_handoff
     type: template
     template: |
@@ -128,7 +194,7 @@ workflow:
         channel: dify_cs_agent
         score: "low"
 
-  # ========== 8. 结束节点 ==========
+  # ========== 9. 结束节点 ==========
   - node_id: end
     type: end
     answer: |
