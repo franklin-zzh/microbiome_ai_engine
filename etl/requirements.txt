@@ -1,0 +1,15 @@
+# ============ 本地 ETL 清洗依赖（Python 3.14 / Windows 实测可用）============
+# 说明：
+# - PaddleOCR 原方案（paddlepaddle）暂无 cp314 wheel（pip 报 No matching distribution），
+#   改用 rapidocr_onnxruntime：同款 PP-OCR 模型 + onnxruntime 推理，效果一致且免编译。
+# - 扫描件/图片页面渲染用 PyMuPDF（pymupdf4llm 自带），无需额外安装 Poppler；
+#   若未来改用 pdf2image 才需要系统级 Poppler（PATH 配置）。
+# - DOCX 主路径用 markitdown（微软官方，多格式统一入口，需 [docx] extra 支持 docx），
+#   docx2python 作保底备选。
+
+markitdown[docx]>=0.1.1
+docx2python>=3.4.0
+python-pptx>=1.0.0
+pymupdf4llm>=0.0.17
+rapidocr_onnxruntime>=1.2.3
+Pillow>=10.0.0

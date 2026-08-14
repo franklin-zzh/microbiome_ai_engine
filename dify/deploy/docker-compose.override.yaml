@@ -56,7 +56,8 @@ services:
         limits:
           memory: 2g
 
-  sandbox:
+  sandbox:                    
+    image: langgenius/dify-sandbox:0.2.14
     deploy:
       resources:
         limits:

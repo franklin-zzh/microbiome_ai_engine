@@ -4,10 +4,14 @@
 docs/DIFY-API-CONTRACT.md 中记录的契约（路径 / payload / 状态码 / 异步索引行为）。
 
 用法：
-    1. 根目录 .env 填好 DIFY_API_KEY（Service API 密钥）与 CS_QA_DATASET_ID（任一知识库 ID）
+    1. 根目录 .env 填好 DIFY_KNOWLEDGE_API_KEY（Service API 密钥，dataset- 前缀）与
+       CS_QA_DATASET_ID / CS_DOC_DATASET_ID（qa_model / text_model 各自的目标库 ID）
     2. cd backend && .venv\\Scripts\\python.exe scripts\\verify_dify_contract.py
-    3. 脚本会创建两个临时文档（qa_model / text_model），轮询索引状态，最后 DELETE 清理；
-       全部通过输出 CONTRACT OK，任何一步失败输出真实状态码与响应体
+    3. 脚本按 doc_form 写入对应形态的库（qa_model→CS_QA，text_model→CS_DOC），
+       轮询索引状态，最后 DELETE 清理；全部通过输出 CONTRACT OK
+
+注意：向 doc_form 不匹配的库写入会被 400 拒绝（invalid_param "doc_form is different from
+the dataset doc_form."），这是 Dify 1.16.1 的预期行为（一库一形态，拒绝混库）。
 
 未配置密钥时脚本安全退出（SKIPPED），不产生任何副作用。
 """
@@ -25,12 +29,12 @@ ROOT_ENV = BACKEND_ROOT.parent / ".env"
 load_dotenv(ROOT_ENV)
 
 BASE_URL = os.getenv("DIFY_BASE_URL", "").rstrip("/")
-API_KEY = os.getenv("DIFY_API_KEY", "")
+# Dify Service API key 按前缀分工：dataset- 前缀=知识库密钥（本脚本与后端知识库操作必需）；
+# app- 前缀=应用密钥（仅能调 /chat-messages 等应用端点，调 /datasets 会 401 权限隔离，勿混用）。
+API_KEY = os.getenv("DIFY_KNOWLEDGE_API_KEY") or os.getenv("DIFY_API_KEY", "")
 DATASET_ID = os.getenv("CS_QA_DATASET_ID", "")
-
-# 1.16.1 知识库文档管理的两类路径（canonical=连字符 / legacy=下划线，均注册）
-CANONICAL_PREFIX = f"/datasets/{DATASET_ID}/documents"
-LEGACY_PREFIX = f"/datasets/{DATASET_ID}/document"
+# text_model 形态的目标库是 CS_DOC（General for CS，doc_form=text_model）
+DOC_DATASET_ID = os.getenv("CS_DOC_DATASET_ID", "")
 
 HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
 
@@ -40,7 +44,7 @@ def log(step: str, resp: httpx.Response, extra: str = "") -> None:
     print(f"[{step}] HTTP {resp.status_code} {extra}\n    -> {body}")
 
 
-def create_by_text(client: httpx.Client, doc_form: str) -> tuple[str, str]:
+def create_by_text(client: httpx.Client, doc_form: str, dataset_id: str) -> tuple[str, str]:
     """创建文档，返回 (document_id, batch)。先试 legacy 下划线路径（后端 dify_knowledge_client 契约基准），
     404 则回退 canonical 连字符路径——用于验证 1.16.1 是否仍保留 legacy alias。"""
     payload = {
@@ -50,10 +54,10 @@ def create_by_text(client: httpx.Client, doc_form: str) -> tuple[str, str]:
         "doc_form": doc_form,
         "doc_language": "Chinese",
     }
-    url = f"{LEGACY_PREFIX}/create_by_text"
+    url = f"/datasets/{dataset_id}/document/create_by_text"
     resp = client.post(url, json=payload)
     if resp.status_code == 404:
-        url = f"{CANONICAL_PREFIX}/create-by-text"
+        url = f"/datasets/{dataset_id}/documents/create-by-text"
         resp = client.post(url, json=payload)
         log("create_by_text", resp, f"path=canonical({url.split('/datasets/')[1]})")
     else:
@@ -65,9 +69,9 @@ def create_by_text(client: httpx.Client, doc_form: str) -> tuple[str, str]:
     return doc.get("id", ""), data.get("batch", "")
 
 
-def wait_indexed(client: httpx.Client, document_id: str, timeout: int = 180) -> str:
+def wait_indexed(client: httpx.Client, document_id: str, dataset_id: str, timeout: int = 180) -> str:
     """轮询文档索引状态（Dify 异步 celery；HTTP 200 仅代表已接收）"""
-    url = f"{CANONICAL_PREFIX}/{document_id}"
+    url = f"/datasets/{dataset_id}/documents/{document_id}"
     deadline = time.time() + timeout
     while time.time() < deadline:
         resp = client.get(url)
@@ -82,8 +86,8 @@ def wait_indexed(client: httpx.Client, document_id: str, timeout: int = 180) -> 
     return "timeout"
 
 
-def delete_document(client: httpx.Client, document_id: str) -> None:
-    url = f"{CANONICAL_PREFIX}/{document_id}"
+def delete_document(client: httpx.Client, document_id: str, dataset_id: str) -> None:
+    url = f"/datasets/{dataset_id}/documents/{document_id}"
     resp = client.delete(url)
     log("delete_document", resp)
     if resp.status_code == 204:
@@ -103,9 +107,9 @@ def main() -> int:
         print("SKIPPED: 根目录 .env 缺少 DIFY_BASE_URL")
         return 0
 
-    print(f"== Dify contract test @ {BASE_URL} dataset={DATASET_ID}")
+    print(f"== Dify contract test @ {BASE_URL}")
     print("== 前置检查：GET dataset（验证 Service API Key 有效）")
-    with httpx.Client(base_url=BASE_URL, headers=HEADERS, timeout=60.0) as client:
+    with httpx.Client(base_url=BASE_URL, headers=HEADERS, timeout=60.0, trust_env=False) as client:
         probe = client.get(f"/datasets/{DATASET_ID}")
         log("get_dataset", probe)
         if probe.status_code == 401:
@@ -113,20 +117,25 @@ def main() -> int:
             return 1
         probe.raise_for_status()
 
-        for doc_form in ("qa_model", "text_model"):
-            print(f"\n== CASE doc_form={doc_form}")
+        # 按形态写入各自目标库：qa_model→CS_QA（Q&A for CS），text_model→CS_DOC（General for CS）
+        cases = [("qa_model", DATASET_ID, "CS_QA 问答库"), ("text_model", DOC_DATASET_ID, "CS_DOC 长文档库")]
+        for doc_form, dataset_id, label in cases:
+            if not dataset_id:
+                print(f"\n== SKIP doc_form={doc_form}（未配置目标库 {label}）")
+                continue
+            print(f"\n== CASE doc_form={doc_form} @ {label}")
             doc_id = ""
             try:
-                doc_id, batch = create_by_text(client, doc_form)
+                doc_id, batch = create_by_text(client, doc_form, dataset_id)
                 print(f"    document_id={doc_id} batch={batch}")
                 if not doc_id:
                     print("    !! 响应中没有 document.id，跳过该形态")
                     continue
-                status = wait_indexed(client, doc_id)
+                status = wait_indexed(client, doc_id, dataset_id)
                 print(f"    final indexing_status={status}")
             finally:
                 if doc_id:
-                    delete_document(client, doc_id)
+                    delete_document(client, doc_id, dataset_id)
 
     print("\n== CONTRACT OK（qa_model / text_model 创建-索引-删除全链路通过）")
     return 0

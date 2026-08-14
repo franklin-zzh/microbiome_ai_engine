@@ -35,3 +35,5 @@ frp-client/frpc.toml
 # 原始文档上传存储（SSOT 文件本体不入库，保留 .gitkeep）
 backend/public/uploads/*
 !backend/public/uploads/.gitkeep
+# ETL 本地清洗产物（样例/输出 md/assets，不入库）
+etl/out/

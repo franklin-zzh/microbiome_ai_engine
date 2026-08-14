@@ -30,16 +30,20 @@ STATE_BLOCKED = "BLOCKED"
 
 # 触发词（HITL）
 HUMAN_REQUEST_KEYWORDS = ("转人工", "人工客服", "找人工", "真人", "客服电话", "投诉")
-# 高风险医疗关键词（与 .agent/rules/medical-safety.md 对齐的触发子集）
+# 高风险医疗关键词（与 .agent/rules/medical-safety.md 对齐；第一道拦截，0 LLM 成本。
+# 含工作流 risk_guard 提示词 Risk Taxonomy 中的确定性词：柏油样便/呕血/频繁呕吐等）
 RISK_KEYWORDS = (
-    "便血", "黑便", "鲜血便", "剧烈腹痛", "持续腹痛", "绞痛",
-    "持续腹泻", "水样便", "脓血便", "体重骤降", "不明原因消瘦",
+    "便血", "黑便", "鲜血便", "柏油样便", "大便带血", "呕血",
+    "剧烈腹痛", "持续腹痛", "绞痛", "肚子疼到打滚", "无法直立",
+    "持续腹泻", "水样便", "频繁呕吐", "脓血便", "体重骤降", "不明原因消瘦",
     "肠梗阻", "肠穿孔", "肠癌", "直肠癌", "结肠癌", "高烧不退", "严重脱水",
 )
 
 SESSION_STATE_KEY = "session:{session_id}:state"
 SESSION_NEG_KEY = "session:{session_id}:neg_streak"
 SESSION_CTX_KEY = "session:{session_id}:context"
+# Dify 对话 conversation_id（多轮续聊用，与状态机共用会话 TTL）
+SESSION_DIFY_CONV_KEY = "session:{session_id}:dify_conv"
 
 
 def _ttl() -> int:
@@ -173,10 +177,25 @@ def get_context(redis: Redis, session_id: str) -> Optional[dict]:
         return None
 
 
+def get_dify_conversation(redis: Redis, session_id: str) -> Optional[str]:
+    """读取 Dify 会话 ID（续聊用；无则 None = 新会话）"""
+    return redis.get(SESSION_DIFY_CONV_KEY.format(session_id=session_id))
+
+
+def set_dify_conversation(redis: Redis, session_id: str, conversation_id: str, ttl: Optional[int] = None) -> None:
+    """保存 Dify 会话 ID（TTL 与状态机一致，随会话过期）"""
+    redis.set(
+        SESSION_DIFY_CONV_KEY.format(session_id=session_id),
+        conversation_id,
+        ex=ttl or _ttl(),
+    )
+
+
 def cleanup_expired(redis: Redis, session_id: str) -> None:
     """会话过期清理（可在会话结束时调用）"""
     redis.delete(
         SESSION_STATE_KEY.format(session_id=session_id),
         SESSION_NEG_KEY.format(session_id=session_id),
         SESSION_CTX_KEY.format(session_id=session_id),
+        SESSION_DIFY_CONV_KEY.format(session_id=session_id),
     )

@@ -159,7 +159,7 @@ netsh advfirewall firewall add rule name="agent_cs backend 8000" dir=in action=a
 2. 创建知识库 `CS_KB` 与 `Sales_KB`,把两个 Dataset ID 填入本地 `.env`(见 8.1)
 3. 导入工作流(仓库 `dify-workflows/` 下的 `cs_agent_chatbot.yml` / `sales_copilot_chatbot.yml` / `sales_case_extractor.yml`)
 4. 在应用的"环境变量"里,把 `BACKEND_BASE_URL` 从 `http://host.docker.internal:8000`
-   改为 `http://<本地开发机局域网IP>:8000`(Dify 在服务器上,`host.docker.internal` 已不再指向你的开发机)
+   改为 `http://192.168.110.42:8000`(Dify 在服务器上,`host.docker.internal` 已不再指向你的开发机)
 
 ### 8.4 端到端验证
 

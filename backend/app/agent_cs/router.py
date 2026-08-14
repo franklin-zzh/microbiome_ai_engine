@@ -2,9 +2,16 @@
 
 - chat_router：对话日志湖 / 会话状态机（mb_ai_engine.cs_*）
 - wechat_router：企微「微信客服」/ 公众号回调入口（5 秒内必须回 success，AI 逻辑异步化）
+
+对话链路（双层风险防护）：
+1. 后端规则拦截（第一道，0 LLM 成本）：回调消息先经 ``route_incoming`` 命中
+   RISK_KEYWORDS -> BLOCKED，直接推送预设安全话术，不调 Dify；
+2. Dify 工作流语义兜底（第二道）：未命中拦截的消息才转发 Dify 客服应用
+   （工作流内 risk_guard 用轻量模型捕获隐晦/同义表达）。
 """
-from datetime import datetime, timedelta
+import asyncio
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -20,6 +27,10 @@ from app.agent_cs.schemas import (
     CsChatLogOut,
     SessionStateOut,
 )
+from app.clients import dify_chat_client
+from app.clients.dify_chat_client import DifyChatError
+from app.clients.wx import wxkf_client
+from app.clients.wx.wxkf_client import WxKfError
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.logging import structured_log
@@ -31,8 +42,38 @@ chat_router = APIRouter(prefix="/chat", tags=["chat"])
 wechat_router = APIRouter(tags=["wechat_kf"])
 settings = get_settings()
 
+# 预设话术（0 LLM 成本）：
+# - 风险拦截：与工作流 risk_handoff 节点话术一致；可用 .env RISK_BLOCKED_REPLY 覆盖
+# - 转人工：HUMAN_MODE 下推送
+# - 兜底：Dify 调用失败时回复
+_DEFAULT_RISK_BLOCKED_REPLY = (
+    "您描述的情况可能涉及健康风险，我这边无法在线判断。建议您尽快联系专业医生或拨打客服热线。"
+    "我马上为您转接专属健康顾问。"
+)
+HUMAN_HANDOFF_REPLY = "正在为您转接人工客服，请稍候。"
+DIFY_FAILBACK_REPLY = "抱歉，系统暂时繁忙，请稍后再试。"
+NON_TEXT_REPLY = "您好，我暂时只能处理文字消息，请用文字描述您的问题～"
+
+
 
 # ============ 对话日志湖 ============
+
+
+def _write_chat_log(db: Session, **fields) -> CsChatLog:
+    """写入一条全量对话日志（Data Lake 闭环入口，内部调用统一走这里）"""
+    record = CsChatLog(**fields)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    structured_log(
+        event="cs_chat_log_written",
+        item_id=record.id,
+        domain="CS",
+        source_type="CHAT_LOG",
+        status="WRITTEN",
+        extra={"session_id": record.session_id, "channel": record.channel.value, "hit_human": record.hit_human},
+    )
+    return record
 
 
 @chat_router.post("/logs", response_model=CsChatLogOut, dependencies=[Depends(require_internal_key)])
@@ -45,7 +86,8 @@ def create_cs_chat_log(
     仅内部异步任务可写（X-API-Key，INTERNAL_API_KEY）。
     第 5 周 Task 5.1 之后由异步任务自动调用；当前先提供显式 API 便于联调。
     """
-    record = CsChatLog(
+    return _write_chat_log(
+        db,
         channel=body.channel,
         session_id=body.session_id,
         open_id=body.open_id,
@@ -60,19 +102,6 @@ def create_cs_chat_log(
         risk_flag=body.risk_flag,
         meta=body.meta,
     )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-
-    structured_log(
-        event="cs_chat_log_written",
-        item_id=record.id,
-        domain="CS",
-        source_type="CHAT_LOG",
-        status="WRITTEN",
-        extra={"session_id": body.session_id, "channel": body.channel, "hit_human": body.hit_human},
-    )
-    return record
 
 
 @chat_router.get("/logs", response_model=CsChatLogListResponse, dependencies=[Depends(require_admin)])
@@ -158,6 +187,33 @@ def get_session_state(
     )
 
 
+def _persist_route_state(
+    db: Session,
+    record: Optional[SessionState],
+    session_id: str,
+    result: dict,
+    channel: str,
+    open_id: str,
+) -> None:
+    """持久化状态镜像（存在则更新，不存在则创建）；expires_at 滚动刷新（与 Redis TTL 对齐）"""
+    expires_at = datetime.now() + timedelta(seconds=settings.session_ttl_seconds)
+    if record is None:
+        record = SessionState(
+            session_id=session_id,
+            channel=channel,
+            open_id=open_id,
+            state=SessionStateValue(result["state"]),
+            expires_at=expires_at,
+        )
+        db.add(record)
+    else:
+        record.state = SessionStateValue(result["state"])
+        record.expires_at = expires_at
+        if result["state"] == sm.STATE_NORMAL:
+            record.negative_streak = 0
+    db.commit()
+
+
 @chat_router.post("/session/{session_id}/route", dependencies=[Depends(require_internal_key)])
 def route_message(
     session_id: str,
@@ -182,23 +238,11 @@ def route_message(
     # 惰性清理过期状态行（顺带执行，不阻塞主流程）
     _lazy_cleanup_expired(db)
 
-    # 持久化状态镜像（存在则更新，不存在则创建）；expires_at 滚动刷新（与 Redis TTL 对齐）
-    expires_at = datetime.now() + timedelta(seconds=settings.session_ttl_seconds)
-    if record is None:
-        record = SessionState(
-            session_id=session_id,
-            channel=body.get("channel", "WXKF"),
-            open_id=body.get("open_id", ""),
-            state=SessionStateValue(result["state"]),
-            expires_at=expires_at,
-        )
-        db.add(record)
-    else:
-        record.state = SessionStateValue(result["state"])
-        record.expires_at = expires_at
-        if result["state"] == sm.STATE_NORMAL:
-            record.negative_streak = 0
-    db.commit()
+    _persist_route_state(
+        db, record, session_id, result,
+        channel=body.get("channel", "WXKF"),
+        open_id=body.get("open_id", ""),
+    )
 
     return {
         "session_id": session_id,
@@ -286,7 +330,10 @@ async def handle_wechat_message(
 
     P0 安全基线：公网可到达的端点必须先验签+解密，验签失败直接拒绝（400），
     防止伪造消息注入；全部操作毫秒级，满足 5 秒内回 success 的硬约束。
-    完整链路（落库 + 异步调 Dify + 主动推送）按计划于 W3（Task 3.1/3.2）接入。
+
+    链路（第一道防线在后端，第二道在 Dify 工作流）：
+    验签解密 -> 状态机分流（命中风险关键词直接 BLOCKED，0 LLM 成本）
+             -> 回 success -> 后台：拦截话术推送 / 未命中则异步调 Dify 后主动推送。
     """
     if not settings.wxkf_token or not settings.wxkf_encoding_aes_key:
         structured_log(
@@ -319,6 +366,7 @@ async def handle_wechat_message(
         plain_xml = crypt.decrypt_msg(msg_signature, timestamp, nonce, encrypt)
         msg_root = ET.fromstring(plain_xml)
         from_user = msg_root.findtext("FromUserName") or ""
+        to_user = msg_root.findtext("ToUserName") or ""   # 客服账号 open_kf_id（主动推送用）
         msg_type = msg_root.findtext("MsgType") or ""
         content = msg_root.findtext("Content") or ""
         msg_id = msg_root.findtext("MsgId") or ""
@@ -331,7 +379,7 @@ async def handle_wechat_message(
         )
         raise HTTPException(status_code=400, detail=f"Callback verification failed: {exc}")
 
-    # 只记录元数据（含 open_id 的消息原文待 W5 日志湖落库；日志不存原文，个保法）
+    # 只记录元数据（日志不存消息原文，个保法）
     structured_log(
         event="wechat_kf_msg_received",
         status="RECEIVED",
@@ -343,5 +391,199 @@ async def handle_wechat_message(
             "msg_id": msg_id,
         },
     )
-    # 5 秒约束：先回 success，AI 逻辑异步化（W3 接入 Celery 链路）
+
+    # 非文本消息：暂不支持，回提示即可（不进入状态机）
+    if msg_type != "text" or not content:
+        structured_log(
+            event="wechat_kf_msg_ignored",
+            status="IGNORED",
+            extra={"from_user": from_user, "msg_type": msg_type, "msg_id": msg_id},
+        )
+        asyncio.create_task(_push_text(to_user, from_user, NON_TEXT_REPLY))
+        return Response(content="success", media_type="text/plain")
+
+    session_id = f"wxkf:{from_user}"
+    # 状态机分流（Redis + DB 镜像均为毫秒级，满足 5 秒约束）：
+    # 第一道防线：命中 RISK_KEYWORDS -> BLOCKED，直接回安全话术，不调 Dify（0 LLM 成本）
+    record = _restore_state_from_db(db, redis, session_id)
+    result = sm.route_incoming(redis, session_id, content)
+    _lazy_cleanup_expired(db)
+    _persist_route_state(db, record, session_id, result, channel="WXKF", open_id=from_user)
+
+    structured_log(
+        event="wechat_kf_route",
+        status=result["state"],
+        extra={
+            "session_id": session_id,
+            "hit_keyword": result["hit_keyword"],
+            "should_answer": result["should_answer"],
+        },
+    )
+
+    # 5 秒约束：先回 success；AI 逻辑（拦截话术推送 / Dify 转发）后台执行
+    asyncio.create_task(_handle_wechat_reply(
+        session_id=session_id,
+        open_id=from_user,
+        open_kf_id=to_user,
+        user_message=content,
+        state=result["state"],
+        hit_keyword=result["hit_keyword"],
+    ))
     return Response(content="success", media_type="text/plain")
+
+
+# ============ 后台回复链路（异步任务，5 秒约束外执行） ============
+
+
+def _risk_blocked_reply() -> str:
+    """风险拦截话术：.env RISK_BLOCKED_REPLY 可覆盖，默认与工作流 risk_handoff 节点一致"""
+    return settings.risk_blocked_reply or _DEFAULT_RISK_BLOCKED_REPLY
+
+
+def _try_push(open_kf_id: str, touser: str, content: str) -> None:
+    """主动推送一条文本；失败只记日志不抛出，保证日志湖/状态机不受影响"""
+    if not open_kf_id:
+        structured_log(
+            event="wxkf_push_skipped",
+            status="SKIPPED",
+            extra={"touser": touser, "reason": "no open_kf_id"},
+        )
+        return
+    try:
+        wxkf_client.send_kf_text(open_kf_id, touser, content)
+    except WxKfError as exc:
+        structured_log(
+            event="wxkf_push_failed",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"touser": touser, "content_len": len(content)},
+        )
+
+
+async def _push_text(open_kf_id: str, touser: str, content: str) -> None:
+    """后台协程推送一条文本（同步网络调用放线程池）"""
+    await asyncio.to_thread(_try_push, open_kf_id, touser, content)
+
+
+def _answer_via_dify(db: Session, session_id: str, open_id: str, open_kf_id: str, user_message: str) -> None:
+    """正常路径：调 Dify 客服应用 -> 推送回答 -> 日志湖；失败回兜底话术"""
+    redis = get_redis()
+    conversation_id = sm.get_dify_conversation(redis, session_id)
+    try:
+        result = dify_chat_client.chat_messages(
+            query=user_message,
+            user=open_id,
+            conversation_id=conversation_id,
+        )
+    except DifyChatError as exc:
+        structured_log(
+            event="dify_chat_failed",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"session_id": session_id},
+        )
+        _try_push(open_kf_id, open_id, DIFY_FAILBACK_REPLY)
+        _write_chat_log(
+            db,
+            channel="WXKF",
+            session_id=session_id,
+            open_id=open_id,
+            user_message=user_message,
+            ai_reply=DIFY_FAILBACK_REPLY,
+            hit_human=False,
+            meta={"route": "dify_error"},
+        )
+        return
+
+    answer = result.get("answer") or DIFY_FAILBACK_REPLY
+    _try_push(open_kf_id, open_id, answer)
+    if result.get("conversation_id"):
+        sm.set_dify_conversation(redis, session_id, result["conversation_id"])
+    _write_chat_log(
+        db,
+        channel="WXKF",
+        session_id=session_id,
+        open_id=open_id,
+        user_message=user_message,
+        ai_reply=answer,
+        retrieved_chunks=result.get("retrieval_resources") or None,
+        meta={"route": "dify", "conversation_id": result.get("conversation_id")},
+    )
+
+
+def _process_and_reply(
+    session_id: str,
+    open_id: str,
+    open_kf_id: str,
+    user_message: str,
+    state: str,
+    hit_keyword: Optional[str],
+) -> None:
+    """后台同步主流程：按状态分流
+
+    - BLOCKED：推送预设安全话术（0 LLM 调用），日志湖标 risk_flag；
+    - HUMAN_MODE：推送转人工话术；
+    - NORMAL：调 Dify 客服应用拿回答后推送。
+    """
+    db = next(get_db())
+    try:
+        if state == sm.STATE_BLOCKED:
+            reply = _risk_blocked_reply()
+            _try_push(open_kf_id, open_id, reply)
+            _write_chat_log(
+                db,
+                channel="WXKF",
+                session_id=session_id,
+                open_id=open_id,
+                user_message=user_message,
+                ai_reply=reply,
+                hit_human=True,
+                risk_flag=True,
+                meta={"route": "blocked", "hit_keyword": hit_keyword},
+            )
+        elif state == sm.STATE_HUMAN_MODE:
+            _try_push(open_kf_id, open_id, HUMAN_HANDOFF_REPLY)
+            _write_chat_log(
+                db,
+                channel="WXKF",
+                session_id=session_id,
+                open_id=open_id,
+                user_message=user_message,
+                ai_reply=HUMAN_HANDOFF_REPLY,
+                hit_human=True,
+                meta={"route": "human"},
+            )
+        else:
+            _answer_via_dify(db, session_id, open_id, open_kf_id, user_message)
+    except Exception as exc:
+        structured_log(
+            event="wechat_kf_reply_failed",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"session_id": session_id, "state": state},
+        )
+    finally:
+        db.close()
+
+
+async def _handle_wechat_reply(
+    session_id: str,
+    open_id: str,
+    open_kf_id: str,
+    user_message: str,
+    state: str,
+    hit_keyword: Optional[str],
+) -> None:
+    """后台协程包装：同步网络/DB 逻辑放入线程池，不阻塞事件循环"""
+    try:
+        await asyncio.to_thread(
+            _process_and_reply,
+            session_id, open_id, open_kf_id, user_message, state, hit_keyword,
+        )
+    except Exception as exc:
+        structured_log(
+            event="wechat_kf_reply_task_error",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"session_id": session_id},
+        )

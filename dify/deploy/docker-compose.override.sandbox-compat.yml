@@ -1,0 +1,30 @@
+# =====================================================================
+# Dify sandbox 降级补丁 —— CentOS 7（内核 3.10）兼容 override
+#
+# 背景：dify-sandbox 0.2.15 在 seccomp 初始化失败时 fail-closed panic
+#   （panic: could not create filter @ cmd/lib/python/main.go:11）。
+#   CentOS 7 内核 3.10 不支持 seccomp(2) 系统调用（3.17 引入）与
+#   SECCOMP_FILTER_FLAG_TSYNC，0.2.15 直接崩溃（官方 issue #260/#265 确认）。
+#   0.2.10 ~ 0.2.14 同样初始化失败但被静默忽略 —— 服务能跑（无 seccomp 隔离）。
+#
+# 用法（服务器 dify-official 目录，与官方 docker-compose.yaml 同级）：
+#   cp docker-compose.override.sandbox-compat.yml docker-compose.override.yaml
+#   docker compose up -d sandbox        # 重新创建 sandbox 容器
+#   docker compose ps                    # 确认 sandbox 状态
+#
+# 双系统通用：Ubuntu 22.04（内核 5.15+）上 0.2.14 的 seccomp 正常生效，
+#   本 override 不区分系统，CentOS 7 / Ubuntu 22.04 同一份配置都能跑。
+#
+# ⚠️ 安全提示：0.2.14 在 3.10 内核上是「无 seccomp 过滤」运行（0.2.15 回归前
+#   的官方行为）；chroot + 降权 + UID 池隔离仍然生效。客服场景 code 节点只跑
+#   受信脚本（merge_docs 等），风险可控；若要在 code 节点执行不可信代码，
+#   建议把宿主机内核升到 4.18+（如 ELRepo kernel-ml）后再回到 0.2.15。
+#
+# 与 dify-api 1.16.1 兼容：接口 POST /v1/sandbox/run 与 0.2.15 相同，无版本协商。
+# =====================================================================
+
+services:
+  # 服务名必须与主 compose 一致（code 节点沙箱叫 sandbox）：
+  # override 按服务名合并 —— 写 local_sandbox 只会新增服务，覆盖不了 sandbox。
+  sandbox:
+    image: langgenius/dify-sandbox:0.2.14

@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # Knowledge Service API Key，只允许后端管理 Dataset/Pipeline。
     # 空值期间回退 DIFY_API_KEY，方便由存量部署平滑迁移；生产应单独配置。
     dify_knowledge_api_key: str = ""
+    # Dify 客服应用（advanced-chat）对话 API Key：企微/公众号消息经后端转发调用 chat-messages 用。
+    # 与知识库 Key 不同，在 Dify 控制台对应应用的「API 访问」页创建；空值期间回退 DIFY_API_KEY。
+    dify_chat_api_key: str = ""
+    dify_chat_timeout_seconds: int = 120     # chat-messages 阻塞响应超时（RAG 链路可能较慢）
+    # 命中高风险医疗关键词时直接返回的预设话术（0 LLM 调用）；留空用内置默认话术
+    risk_blocked_reply: str = ""
     # 域 -> 知识库映射（留空 = 未启用，启用前 dataset_id_for_domain 会拒绝该域/形态）
     cs_qa_dataset_id: str = ""       # CS 问答库（qa_model；同时作为原始文档 Pipeline 的发布目标）
     cs_doc_dataset_id: str = ""      # CS 长文档库（text_model/hierarchical_model，双库预留）

@@ -1,228 +1,958 @@
-# 客服 Agent 工作流 (CS Agent Chatbot) —— 双库检索 + Rerank
-# 导入方式：Dify -> 创建应用 -> 导入 DSL（如需实际导入请根据 Dify 当前版本导出空模板后替换本文件字段）
-#
-# 知识库双库利用（2026-08-12 起）：
-# - CS_QA（问答库，qa_model / Knowledge Pipeline 生成）：语义检索，精确回答客服 FAQ
-# - CS_DOC（长文档库，text_model / create_by_file 原生切割）：hybrid 检索，覆盖公司文档/手册等长文
-# 两路结果合并后经 Rerank 排序，由 answer_llm 统一作答；高分缺失才转人工。
-
 app:
-  name: 肠道健康客服助手
-  mode: chatbot
+  description: '挂载 CS_QA + CS_DOC 双知识库，回答肠菌检测/调养客服问题。
+
+    后端已做高风险关键词拦截（第一道），本工作流 risk_guard 语义兑底（第二道）；
+
+    QA 库语义检索 + DOC 库混合检索（各自内置 Rerank）-> 合并按分排序 -> LLM 作答；
+
+    语义兑底命中或检索为空时触发转人工，并回调后端捕获未解答问题。
+
+    '
   icon: 🤖
-
-description: |
-  挂载 CS_QA + CS_DOC 双知识库，回答肠菌检测/调养客服问题。
-  QA 库语义检索 + DOC 库混合检索 -> Rerank 重排 -> LLM 作答；
-  检索为空或命中高风险关键词时，触发转人工并回调后端捕获未解答问题。
-
-environment_variables:
-  - name: BACKEND_BASE_URL
-    value: http://host.docker.internal:8000
-    type: string
-  # P0：回调共享密钥（导入后填入与 backend .env INTERNAL_API_KEY 相同的值）
-  - name: INTERNAL_API_KEY
-    value: ""
-    type: string
-
+  icon_background: '#E0F2FE'
+  icon_type: emoji
+  mode: advanced-chat
+  name: 肠道健康客服助手
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/deepseek:0.0.19@1aa3c64e2f50179afe8410ad79412dab92bf5919a27da8e2b13071b5e5f8ce81
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/siliconflow:0.0.59@8f02741bb210eac68b68263c1cbede0e0637f2d1ad082895906e03253461729c
+    version: null
+kind: app
+version: 0.7.0
 workflow:
-  # ========== 1. 开始节点 ==========
-  - node_id: start
-    type: start
-    outputs:
-      - name: query
-        type: string
-        description: 用户输入
+  conversation_variables: []
+  environment_variables:
+  - description: 后端服务地址（Dify 容器内访问宿主机用 host.docker.internal；服务器部署按实际可达地址改）
+    id: 33333333-3333-3333-3333-333333333333
+    name: BACKEND_BASE_URL
+    selector:
+    - env
+    - BACKEND_BASE_URL
+    value: https://wx.fmtcloud.cn
+    value_type: string
+  - description: 回调共享密钥，与 backend .env INTERNAL_API_KEY 保持一致
+    id: 44444444-4444-4444-4444-444444444444
+    name: INTERNAL_API_KEY
+    selector:
+    - env
+    - INTERNAL_API_KEY
+    value: ''
+    value_type: secret
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 20
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        single_chunk_attachment_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: '您好，我是「肠道健康」品牌的智能客服助手，可以为您解答肠菌检测流程、报告解读（非诊断）、
 
-  # ========== 2. 高风险关键词检查（前置护栏） ==========
-  - node_id: risk_guard
-    type: llm
-    model: DeepSeek-V3
-    system: |
-      你是一台安全分类器。判断用户输入是否包含任何高风险医疗描述或症状。
-      高风险清单：便血、黑便、鲜血便、剧烈腹痛、持续腹痛、绞痛、持续腹泻、水样便、脓血便、
-      体重骤降、不明原因消瘦、肠梗阻、肠穿孔、肠癌、直肠癌、结肠癌、高烧不退、严重脱水。
-      仅回答 true 或 false，不要解释。
-    prompt: "用户输入：{{#start.query#}}"
-    outputs:
-      - name: risk_flag
-        type: string
+      肠道健康科普以及产品与调养服务相关问题。请问有什么可以帮您？
 
-  # ========== 3. 条件分支：高风险直接转人工 ==========
-  - node_id: risk_branch
-    type: condition
-    conditions:
-      - if: "{{#risk_guard.risk_flag#}} == 'true'"
-        to: risk_handoff
-      - else:
-        to: knowledge_retrieval_qa
+      '
+    retriever_resource:
+      enabled: true
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions:
+    - 肠菌检测怎么做？流程是什么？
+    - 检测报告怎么看？
+    - 肠道调理服务有哪些？
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: if-else
+      id: 1786676257638-source-risk_branch-target
+      source: '1786676257638'
+      sourceHandle: source
+      target: risk_branch
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: llm
+        targetType: answer
+      id: e-answer_llm-answer_main
+      selected: false
+      source: answer_llm
+      sourceHandle: source
+      target: answer_main
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: http-request
+        targetType: answer
+      id: e-fallback_callback-answer_fallback
+      selected: false
+      source: fallback_callback
+      sourceHandle: source
+      target: answer_fallback
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: knowledge-retrieval
+        targetType: code
+      id: e-kr_doc-merge
+      selected: false
+      source: knowledge_retrieval_doc
+      sourceHandle: source
+      target: merge_docs
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: knowledge-retrieval
+        targetType: code
+      id: e-kr_qa-merge
+      selected: false
+      source: knowledge_retrieval_qa
+      sourceHandle: source
+      target: merge_docs
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: if-else
+      id: e-merge-score_branch
+      selected: false
+      source: merge_docs
+      sourceHandle: source
+      target: score_branch
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: knowledge-retrieval
+      id: e-risk_branch-false-knowledge_retrieval_doc
+      selected: false
+      source: risk_branch
+      sourceHandle: 'false'
+      target: knowledge_retrieval_doc
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: knowledge-retrieval
+      id: e-risk_branch-false-knowledge_retrieval_qa
+      selected: false
+      source: risk_branch
+      sourceHandle: 'false'
+      target: knowledge_retrieval_qa
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: template-transform
+      id: e-risk_branch-true-risk_handoff
+      selected: false
+      source: risk_branch
+      sourceHandle: 'true'
+      target: risk_handoff
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: http-request
+        targetType: answer
+      id: e-risk_callback-answer_risk
+      selected: false
+      source: risk_callback
+      sourceHandle: source
+      target: answer_risk
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: template-transform
+        targetType: http-request
+      id: e-risk_handoff-risk_callback
+      selected: false
+      source: risk_handoff
+      sourceHandle: source
+      target: risk_callback
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: llm
+      id: e-score_branch-true-answer_llm
+      selected: false
+      source: score_branch
+      sourceHandle: 'true'
+      target: answer_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: start
+        targetType: llm
+      id: e-start-risk_guard
+      selected: false
+      source: start
+      sourceHandle: source
+      target: risk_guard
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: template-transform
+        targetType: http-request
+      id: fallback_handoff-source-fallback_callback-target
+      selected: false
+      source: fallback_handoff
+      sourceHandle: source
+      target: fallback_callback
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: llm
+        targetType: code
+      id: risk_guard-source-1786676257638-target
+      selected: false
+      source: risk_guard
+      sourceHandle: source
+      target: '1786676257638'
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: template-transform
+      id: score_branch-false-fallback_handoff-target
+      selected: false
+      source: score_branch
+      sourceHandle: 'false'
+      target: fallback_handoff
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        code: "def main(llm_text: str) -> dict:\n    import re\n    text = re.sub(r\"\
+          <think>.*?</think>\", \"\", llm_text or \"\", flags=re.S)  # ① 剥掉思考内容\n\
+          \    if \"TRUE\" in text:   \n        return {\"risk_flag\": \"TRUE\"}\n\
+          \    return {\"risk_flag\": \"FALSE\"}"
+        code_language: python3
+        outputs:
+          risk_flag:
+            children: null
+            type: string
+        selected: false
+        title: LLM结果提取
+        type: code
+        variables:
+        - value_selector:
+          - risk_guard
+          - text
+          value_type: string
+          variable: llm_text
+      height: 52
+      id: '1786676257638'
+      position:
+        x: 269.7703797098291
+        y: 397.23047532495553
+      positionAbsolute:
+        x: 269.7703797098291
+        y: 397.23047532495553
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: '{{#fallback_handoff.output#}}'
+        desc: ''
+        selected: false
+        title: 低置信度应答
+        type: answer
+        variables: []
+      height: 102
+      id: answer_fallback
+      position:
+        x: 2425.208120694677
+        y: 716.1744462434616
+      positionAbsolute:
+        x: 2425.208120694677
+        y: 716.1744462434616
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 基于检索结果回答用户
+        model:
+          completion_params:
+            max_tokens: 1024
+            temperature: 0.3
+          mode: chat
+          name: deepseek-v4-flash
+          provider: langgenius/deepseek/deepseek
+        prompt_config:
+          jinja2_variables:
+          - value_selector:
+            - merge_docs
+            - merged
+            variable: merged
+        prompt_template:
+        - edition_type: basic
+          id: badb7181-5e48-4f81-bb23-6fbe3f2ac65d
+          role: system
+          text: '你是「肠道健康」品牌的智能客服助手，只能回答：
 
-  # ========== 3a. 高风险转人工话术 + 回调 ==========
-  - node_id: risk_handoff
-    type: template
-    template: |
-      您描述的情况可能涉及健康风险，我这边无法在线判断。建议您尽快联系专业医生或拨打客服热线。
-      我马上为您转接专属健康顾问。
+            1) 肠菌检测流程与报告解读（非诊断）；
 
-  - node_id: risk_callback
-    type: http_request
-    method: POST
-    url: "{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture"
-    headers:
-      Content-Type: application/json
-      X-API-Key: "{{#env.INTERNAL_API_KEY#}}"
-    body:
-      user_query: "{{#start.query#}}"
-      risk_flag: true
-      context:
-        channel: dify_cs_agent
+            2) 肠道健康科普知识；
 
-  # ========== 4. 双库检索 ==========
-  # 4a. QA 问答库：语义检索，精确问答（Pipeline 生成的高质量 QA 对）
-  - node_id: knowledge_retrieval_qa
-    type: knowledge_retrieval
-    dataset: CS_QA
-    retrieval_mode: semantic
-    top_k: 3
-    score_threshold: 0.65
-    query: "{{#start.query#}}"
-    outputs:
-      - name: result
-        type: array
+            3) 公司产品和调养服务说明；
 
-  # 4b. DOC 长文档库：hybrid 检索（全文+语义），覆盖公司文档/产品手册等长文；
-  #     阈值放宽，交给 Rerank 精排
-  - node_id: knowledge_retrieval_doc
-    type: knowledge_retrieval
-    dataset: CS_DOC
-    retrieval_mode: hybrid
-    top_k: 5
-    score_threshold: 0.3
-    query: "{{#start.query#}}"
-    outputs:
-      - name: result
-        type: array
+            4) 订单、物流、退款政策。
 
-  # ========== 4c. 合并两路结果（带来源标识，供 Rerank/回答引用） ==========
-  - node_id: merge_docs
-    type: code
-    code_language: python3
-    code: |
-      def main(query: str, qa_docs: list, doc_docs: list) -> dict:
-          merged = []
-          for d in qa_docs:
-              merged.append({"content": d.get("content") or d.get("title", ""),
-                             "title": d.get("title", ""),
-                             "score": d.get("score", 0.0),
-                             "source": "CS_QA"})
-          for d in doc_docs:
-              merged.append({"content": d.get("content") or d.get("title", ""),
-                             "title": d.get("title", ""),
-                             "score": d.get("score", 0.0),
-                             "source": "CS_DOC"})
-          return {"merged": merged}
-    inputs:
-      - name: query
-        value: "{{#start.query#}}"
-        type: string
-      - name: qa_docs
-        value: "{{#knowledge_retrieval_qa.result#}}"
-        type: array
-      - name: doc_docs
-        value: "{{#knowledge_retrieval_doc.result#}}"
-        type: array
-    outputs:
-      - name: merged
-        type: array
 
-  # ========== 5. Rerank 精排 ==========
-  # 前置条件：Dify「模型供应商」需配置 rerank 模型（如 bge-reranker-v2-m3 / bge-reranker-large）
-  - node_id: rerank
-    type: rerank
-    model: bge-reranker-v2-m3
-    query: "{{#start.query#}}"
-    documents: "{{#merge_docs.merged#}}"
-    top_n: 5
-    score_threshold: 0.3
-    outputs:
-      - name: result
-        type: array
+            严格遵循以下规则：
 
-  # ========== 6. 置信度分支（基于 Rerank 后结果） ==========
-  - node_id: score_branch
-    type: condition
-    conditions:
-      - if: "{{#rerank.result#}}.length > 0"
-        to: answer_llm
-      - else:
-        to: fallback_handoff
+            - 不做出任何疾病诊断，不推荐使用药品或具体剂量。
 
-  # ========== 7. 正常回答 LLM ==========
-  - node_id: answer_llm
-    type: llm
-    model: DeepSeek-V3
-    system: |
-      {{#system_prompt#}}
-    prompt: |
-      用户问题：{{#start.query#}}
+            - 遇到便血、剧烈腹痛、持续腹泻、体重骤降、高烧等高风险描述时，必须立刻输出转人工话术，不再继续回答问题。
 
-      检索到的参考内容（Rerank 后按相关度排序）：
-      {{#rerank.result#}}
+            - 报告中的检测指标仅做"科普性解释"，结尾必须建议用户咨询医生或营养师。
 
-      请基于参考内容生成回答，不要添加未在知识库中出现的信息。
-      QA 知识库（CS_QA）中的问答对优先作为标准话术；DOC 知识库（CS_DOC）内容用于补充细节。
-      如果参考内容无法回答，请输出“我无法确定”并建议转人工。
+            - 产品功效只引用已审核知识库内的标准话术，不得自行发挥。
 
-  # ========== 8. 低置信度兜底：回调 + 话术 ==========
-  - node_id: fallback_handoff
-    type: template
-    template: |
-      抱歉，您的问题比较复杂，我暂时无法准确回答。已为您记录，专属健康顾问会尽快联系您，请稍候。
+            - 若用户问题超出知识库范围或你不确定，请礼貌告知无法回答并引导转人工。
 
-  - node_id: fallback_callback
-    type: http_request
-    method: POST
-    url: "{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture"
-    headers:
-      Content-Type: application/json
-      X-API-Key: "{{#env.INTERNAL_API_KEY#}}"
-    body:
-      user_query: "{{#start.query#}}"
-      match_score: 0.0
-      risk_flag: false
-      context:
-        channel: dify_cs_agent
-        score: "low"
+            - 所有医疗相关内容末尾追加：以上信息仅供参考，不能替代专业医疗建议。如有不适，请及时就医。
 
-  # ========== 9. 结束节点 ==========
-  - node_id: end
-    type: end
-    answer: |
-      {% if branch == 'risk' %}
-      {{#risk_handoff.output#}}
-      {% elif branch == 'answer' %}
-      {{#answer_llm.output#}}
-      {% else %}
-      {{#fallback_handoff.output#}}
-      {% endif %}
+            '
+        - edition_type: jinja2
+          id: fe8f30d1-9750-4390-aa98-499ca93aeac3
+          jinja2_text: '{{ merged }}'
+          role: user
+          text: ''
+        - edition_type: basic
+          id: 0510db34-58ca-48fe-8816-8ef0f8439253
+          jinja2_text: '{{ merged }}'
+          role: user
+          text: '用户问题：{{#sys.query#}}
 
-system_prompt: |
-  你是「肠道健康」品牌的智能客服助手，只能回答：
-  1) 肠菌检测流程与报告解读（非诊断）；
-  2) 肠道健康科普知识；
-  3) 公司产品和调养服务说明；
-  4) 订单、物流、退款政策。
 
-  严格遵循以下规则：
-  - 不做出任何疾病诊断，不推荐使用药品或具体剂量。
-  - 遇到便血、剧烈腹痛、持续腹泻、体重骤降、高烧等高风险描述时，必须立刻输出转人工话术，不再继续回答问题。
-  - 报告中的检测指标仅做“科普性解释”，结尾必须建议用户咨询医生或营养师。
-  - 产品功效只引用已审核知识库内的标准话术，不得自行发挥。
-  - 若用户问题超出知识库范围或你不确定，请礼貌告知无法回答并引导转人工。
-  - 所有医疗相关内容末尾追加：以上信息仅供参考，不能替代专业医疗建议。如有不适，请及时就医。
+            检索到的参考内容（按相关度排序）：
 
-recommended_model:
-  provider: DeepSeek
-  model: DeepSeek-V3
-  temperature: 0.3
-  max_tokens: 1024
+            {{#merge_docs.merged#}}
+
+            请基于参考内容生成回答，不要添加未在知识库中出现的信息。
+
+            QA 知识库（CS_QA）中的问答对优先作为标准话术；DOC 知识库（CS_DOC）内容用于补充细节。
+
+            如果参考内容无法回答，请输出"我无法确定"并建议转人工。
+
+            '
+        selected: false
+        title: 客服回答
+        type: llm
+        version: '1'
+        vision:
+          enabled: false
+      height: 116
+      id: answer_llm
+      position:
+        x: 1779.0557440698992
+        y: 427.0966325548784
+      positionAbsolute:
+        x: 1779.0557440698992
+        y: 427.0966325548784
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: '{{#answer_llm.text#}}'
+        desc: ''
+        selected: false
+        title: 正常应答
+        type: answer
+        variables: []
+      height: 102
+      id: answer_main
+      position:
+        x: 2082.0297111698396
+        y: 427.0966325548784
+      positionAbsolute:
+        x: 2082.0297111698396
+        y: 427.0966325548784
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: '{{#risk_handoff.output#}}'
+        desc: ''
+        selected: false
+        title: 高风险应答
+        type: answer
+        variables: []
+      height: 102
+      id: answer_risk
+      position:
+        x: 1460
+        y: 120
+      positionAbsolute:
+        x: 1460
+        y: 120
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        authorization:
+          type: no-auth
+        body:
+          data:
+          - type: text
+            value: '{"user_query": "{{#sys.query#}}", "match_score": 0.0, "risk_flag":
+              false, "context": {"channel": "dify_cs_agent", "score": "low"}}'
+          type: json
+        desc: 通知后端捕获未解答问题
+        headers: 'Content-Type:application/json
+
+          X-API-Key:{{#env.INTERNAL_API_KEY#}}'
+        method: POST
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          connect: 10
+          read: 30
+          write: 30
+        title: 低置信度回调
+        type: http-request
+        url: '{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture'
+      height: 169
+      id: fallback_callback
+      position:
+        x: 2082.0297111698396
+        y: 716.1744462434616
+      positionAbsolute:
+        x: 2082.0297111698396
+        y: 716.1744462434616
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: ''
+        selected: false
+        template: '抱歉，您的问题比较复杂，我暂时无法准确回答。已为您记录，专属健康顾问会尽快联系您，请稍候。
+
+          '
+        title: 低置信度转人工话术
+        type: template-transform
+        variables: []
+      height: 52
+      id: fallback_handoff
+      position:
+        x: 1769.866157229923
+        y: 716.1744462434616
+      positionAbsolute:
+        x: 1769.866157229923
+        y: 716.1744462434616
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        dataset_ids:
+        - Pq44sQkP0HAjufrZOiYpJjyq/ZjEtwdWzzr+B8CHIgtAUZeQCcPVC7cgBwhN4b3r
+        - HdN093rKCHHikE7V/43MMBYRi8lAOdKGhiVsZ27faFvZtoo5HJcZLemF2xJNMDJc
+        desc: CS_DOC 长文档库，top_k 5，阈值 0.3
+        metadata_filtering_mode: disabled
+        multiple_retrieval_config:
+          reranking_enable: true
+          reranking_mode: reranking_model
+          reranking_model:
+            model: Qwen/Qwen3-Reranker-0.6B
+            provider: langgenius/siliconflow/siliconflow
+          score_threshold: 0.3
+          top_k: 5
+          weights: null
+        query_attachment_selector: []
+        query_variable_selector:
+        - sys
+        - query
+        retrieval_mode: multiple
+        selected: false
+        single_retrieval_config: null
+        title: 检索 DOC 知识库
+        type: knowledge-retrieval
+      height: 118
+      id: knowledge_retrieval_doc
+      position:
+        x: 900
+        y: 620
+      positionAbsolute:
+        x: 900
+        y: 620
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        dataset_ids:
+        - rrzxjFlDmXAw70eqR3XbQw1+behx6FC3Px7c/uKjk7HdAUjdFW+wLSrSDymY6Iga
+        - zB8HeIrF1981jIYFgUjsZjGGu67OZe5S7GznHd32Ao/Q6NXbcgNho2/PyAoItOAN
+        desc: CS_QA 问答库，top_k 3，阈值 0.65
+        metadata_filtering_mode: disabled
+        multiple_retrieval_config:
+          reranking_enable: true
+          reranking_mode: reranking_model
+          reranking_model:
+            model: Qwen/Qwen3-Reranker-0.6B
+            provider: langgenius/siliconflow/siliconflow
+          score_threshold: 0.65
+          top_k: 3
+          weights: null
+        query_attachment_selector: []
+        query_variable_selector:
+        - sys
+        - query
+        retrieval_mode: multiple
+        selected: false
+        single_retrieval_config: null
+        title: 检索 QA 知识库
+        type: knowledge-retrieval
+      height: 118
+      id: knowledge_retrieval_qa
+      position:
+        x: 904.594793419988
+        y: 415.6096490049081
+      positionAbsolute:
+        x: 904.594793419988
+        y: 415.6096490049081
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        code: "def main(query: str = \"\", qa_docs: list = None, doc_docs: list =\
+          \ None) -> dict:\n    # 1. 保底防空处理：如果 upstream 节点传了 None，自动转为空列表 []\n   \
+          \ qa_docs = qa_docs if isinstance(qa_docs, list) else []\n    doc_docs =\
+          \ doc_docs if isinstance(doc_docs, list) else []\n\n    def pick_score(d:\
+          \ dict) -> float:\n        # Dify 1.16 knowledge-retrieval 的分数在 metadata.score（部分版本在顶层\
+          \ score），都兼容\n        try:\n            s = d.get(\"score\")\n         \
+          \   if s is None:\n                s = (d.get(\"metadata\") or {}).get(\"\
+          score\", 0.0)\n            return float(s)\n        except (ValueError,\
+          \ TypeError):\n            return 0.0\n\n    merged = []\n\n    # 2. 遍历\
+          \ QA 知识库\n    for d in qa_docs:\n        if isinstance(d, dict):  # 确保元素是字典，防止\
+          \ .get 方法报错\n            # 兼容多种可能的文本字段名\n            content = d.get(\"\
+          content\") or d.get(\"text\") or d.get(\"title\") or \"\"\n            title\
+          \ = d.get(\"title\") or \"\"\n            merged.append({\n            \
+          \    \"content\": content,\n                \"title\": title,\n        \
+          \        \"score\": pick_score(d),\n                \"source\": \"CS_QA\"\
+          ,\n            })\n\n    # 3. 遍历 DOC 知识库\n    for d in doc_docs:\n     \
+          \   if isinstance(d, dict):\n            content = d.get(\"content\") or\
+          \ d.get(\"text\") or d.get(\"title\") or \"\"\n            title = d.get(\"\
+          title\") or \"\"\n            merged.append({\n                \"content\"\
+          : content,\n                \"title\": title,\n                \"score\"\
+          : pick_score(d),\n                \"source\": \"CS_DOC\",\n            })\n\
+          \n    # 4. 按得分降序排序\n    merged.sort(key=lambda x: x[\"score\"], reverse=True)\n\
+          \n    # 5. 返回 merged 给下游分支；top_score 供 if-else 置信度门槛使用\n    return {\"merged\"\
+          : merged, \"top_score\": merged[0][\"score\"] if merged else 0.0}"
+        code_language: python3
+        desc: 合并 QA/DOC 两路检索结果，按 score 降序
+        outputs:
+          merged:
+            type: array[object]
+          top_score:
+            children: null
+            type: number
+        selected: true
+        title: 合并排序
+        type: code
+        variables:
+        - value_selector:
+          - sys
+          - query
+          variable: query
+        - value_selector:
+          - knowledge_retrieval_qa
+          - result
+          variable: qa_docs
+        - value_selector:
+          - knowledge_retrieval_doc
+          - result
+          variable: doc_docs
+      height: 96
+      id: merge_docs
+      position:
+        x: 1186.8921901299823
+        y: 448.9219012998221
+      positionAbsolute:
+        x: 1186.8921901299823
+        y: 448.9219012998221
+      selected: true
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: contains
+            value: 'TRUE'
+            varType: string
+            variable_selector:
+            - '1786676257638'
+            - risk_flag
+          id: 'true'
+          logical_operator: and
+        - case_id: 'false'
+          conditions:
+          - comparison_operator: not contains
+            value: 'TRUE'
+            varType: string
+            variable_selector:
+            - '1786676257638'
+            - risk_flag
+          id: 'false'
+          logical_operator: and
+        desc: 高风险 -> 转人工；否则 -> 双库检索
+        selected: false
+        title: 是否高风险
+        type: if-else
+      height: 248
+      id: risk_branch
+      position:
+        x: 586.2156197400355
+        y: 402.2973967099941
+      positionAbsolute:
+        x: 586.2156197400355
+        y: 402.2973967099941
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        authorization:
+          type: no-auth
+        body:
+          data:
+          - type: text
+            value: '{"user_query": "{{#sys.query#}}", "risk_flag": true, "context":
+              {"channel": "dify_cs_agent"}}'
+          type: json
+        desc: 通知后端捕获高风险问题
+        headers: 'Content-Type:application/json
+
+          X-API-Key:{{#env.INTERNAL_API_KEY#}}'
+        method: POST
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: false
+        timeout:
+          connect: 10
+          read: 30
+          write: 30
+        title: 高风险回调
+        type: http-request
+        url: '{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture'
+      height: 169
+      id: risk_callback
+      position:
+        x: 1180
+        y: 120
+      positionAbsolute:
+        x: 1180
+        y: 120
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 后端已先拦高风险关键词；此处仅捕获隐晦/同义/上下文风险表达，用便宜模型
+        model:
+          completion_params:
+            max_tokens: 256
+            temperature: 0
+          mode: chat
+          name: deepseek-v4-flash
+          provider: langgenius/deepseek/deepseek
+        prompt_template:
+        - edition_type: basic
+          id: 5bc9ae69-f587-4047-b53a-1aa2608f4fa8
+          role: system
+          text: "# Role\n你是一个专业医疗系统的前置安全分类网关。你的唯一任务是分析用户的输入，准确判断其是否包含【正在发生的急性高风险或危重医疗症状】。\n\
+            \n# Risk Taxonomy (高风险及隐晦表达清单)\n1. 消化道出血：便血、黑便、柏油样便、鲜血便、脓血便、大便带血、呕血。\n\
+            2. 剧烈腹痛：剧烈腹痛、持续腹痛、绞痛、肚子疼到打滚、无法直立。\n3. 危重、急症：持续腹泻、水样便、频繁呕吐、严重脱水、高烧不退、近期不明原因体重骤降、消瘦。\n\
+            4. 肿瘤与危重病变急性发作：提示存在肠梗阻、肠穿孔，或疑似、确诊 肠癌、直肠癌、结肠癌相关的急性发作表现。\n\n# Decision Rules\
+            \ (分类判定逻辑)\n- 判定为 true (高风险)：用户正在描述【当前正在发生、体验】的上述高风险症状（含口语化、隐晦表达，例如\"\
+            拉出来的全是鲜红液体\"、\"肚子绞着疼\"）。\n- 判定为 false (非高风险)：\n  1. 用户仅询问【科普、预防知识】（例：\"\
+            如何预防结肠癌？\"、\"便血通常是什么原因？\"）。\n  2. 用户提供【历史既往史、非急性背景】（例：\"我三年前得过结肠癌，现在能吃这个吗？\"\
+            ）。\n  3. 用户咨询普通健康问题，且无上述急重症表现。\n\n# Output Constraints\n必须且只能输出 UPPERCASE\
+            \ 的 `TRUE` 或 `FALSE`，不要包含任何标点符号、换行或 Markdown 格式。\n\n- 存在高风险：只输出 TRUE\n\
+            - 无高风险：只输出 FALSE\n"
+        - edition_type: basic
+          id: c5c8f1ac-1b6b-4be7-b500-1f077265bb0c
+          role: user
+          text: 用户输入：{{#sys.query#}}
+        selected: false
+        title: 风险语义兑底
+        type: llm
+        version: '1'
+        vision:
+          enabled: false
+      height: 132
+      id: risk_guard
+      position:
+        x: -68.26004398899798
+        y: 397.23047532495553
+      positionAbsolute:
+        x: -68.26004398899798
+        y: 397.23047532495553
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: ''
+        selected: false
+        template: '您描述的情况可能涉及健康风险，我这边无法在线判断。建议您尽快联系专业医生或拨打客服热线。
+
+          我马上为您转接专属健康顾问。
+
+          '
+        title: 高风险转人工话术
+        type: template-transform
+        variables: []
+      height: 52
+      id: risk_handoff
+      position:
+        x: 900
+        y: 120
+      positionAbsolute:
+        x: 900
+        y: 120
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: ≥
+            value: '0.5'
+            varType: number
+            variable_selector:
+            - merge_docs
+            - top_score
+          id: 'true'
+          logical_operator: and
+        - case_id: 'false'
+          conditions:
+          - comparison_operator: <
+            id: b193a6de-e16d-484a-8724-eb101ef8801a
+            value: '0.5'
+            varType: number
+            variable_selector:
+            - merge_docs
+            - top_score
+          id: 'false'
+          logical_operator: and
+        desc: 合并结果非空 -> 正常作答；否则 -> 转人工
+        selected: false
+        title: 是否有可用结果
+        type: if-else
+      height: 216
+      id: score_branch
+      position:
+        x: 1468.0408884849792
+        y: 427.0966325548784
+      positionAbsolute:
+        x: 1468.0408884849792
+        y: 427.0966325548784
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: ''
+        selected: false
+        title: 开始
+        type: start
+        variables: []
+      height: 73
+      id: start
+      position:
+        x: -375.82880450892696
+        y: 376.23047532495553
+      positionAbsolute:
+        x: -375.82880450892696
+        y: 376.23047532495553
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    viewport:
+      x: -1215.6029137399162
+      y: -195.36414632363744
+      zoom: 0.870550563296124
+  rag_pipeline_variables: []

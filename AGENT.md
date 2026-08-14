@@ -162,9 +162,9 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-12 17:35
+- **最近一次同步时间**：2026-08-14 15:25
 
-- **当前关注的架构焦点**：知识库双形态落地 + 旧链路下线（2026-08-12）——① 旧知识项链路（`core_knowledge_items` 手工录入 + `core_sync_tasks` 对账 outbox + 旧 `dify_client.py`）整体下线：路由/模型/迁移/seed/admin 清理，unanswered/sales-case 保留但不再关联知识项（迁移 `c9d8e7f6a5b4`）；② DOC 知识库（非 QA 文件）：`core_knowledge_documents.doc_form`（qa_model/text_model/hierarchical_model）单选决定目标库，text_model 走 `dify_knowledge_client.create_by_file` 直传（Dify 原生切割，CS_DOC_DATASET_ID=60c9bb5b-...），qa_model 走 Knowledge Pipeline；一个文档一个形态一个库，未配置拒绝发布；③ 客服工作流双库检索：`cs_agent_chatbot.yml` 改为 CS_QA（semantic 0.65）+ CS_DOC（hybrid 0.3）→ merge（code 节点带 source）→ Rerank（bge-reranker-v2-m3，top_n 5）→ LLM；④ 客户端合并为 `app/clients/dify_knowledge_client.py`（直传 + Pipeline + 轮询/segments/删除）。pytest 31/31。下一步：Dify 控制台导入新工作流并配置 rerank 模型；跑 `verify_dify_contract.py` 契约实测。
+- **当前关注的架构焦点**：微信客服接入联调收尾（2026-08-14）——① 代码全就绪：回调验签解密（`/wx/msg` GET 校验 + POST 消息）→ Redis 状态机（NORMAL/BLOCKED/HUMAN_MODE）→ 关键词网关拦截（0 LLM）→ `dify_chat_client` 调 Dify → `wxkf_client` 企微主动推送 → `cs_chat_logs` 落库，pytest 16/16；② `.env` 企微四键已填、frp token 已与服务器 frps.toml 同步（待办 #6 完成，`https://wx.fmtcloud.cn` 已验证可达本地 backend）；③ E7（answer_llm `<think>` 泄漏）已在 Dify 控制台修复；④ 接入联调手册已沉淀：`docs/wxkf-runbook.md`（链路架构/企微后台配置 6 步/三态端到端验证/10 条故障排查/核对清单）。下一步：企微后台配回调 URL + 创建客服账号 → 三态实测（真实微信消息），完成后勾待办 #8。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。
@@ -172,11 +172,15 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
     - [x] 3. 微信回调 POST 占位路由（先回 `success` 满足 5 秒约束，异步链路第 3 周接入）。
     - [x] 4. docker-compose.yml 复用宿主 MySQL8/Redis；docker-compose.dify.yml（官方镜像 1.16.1，端口 5434/6381）。
     - [x] 5. P0 安全基线：JWT+角色鉴权（require_admin/require_internal_key）、/auth/login、CORS 白名单注入、默认凭据必填（config 校验 + compose `:?`）、微信 POST 验签+解密、frp token 轮换移出 git。pytest 22/22。
-    - [ ] 6. ⚠️ 服务器端 frps.toml auth.token 同步为新 token（本地 frpc.toml 已生成，需与服务端一致后重启 frpc/frps）。
-    - [ ] 7. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）。
-    - [ ] 8. 第 3 周：企微微信客服消息解密后落库 + 主动推送、Celery 异步队列（回调验签/解密已提前完成）。
+    - [x] 6. ✅ 服务器端 frps.toml auth.token 已同步（本地 frpc.toml token 与服务端一致，frpc/frps 已重启）——2026-08-14 完成，`https://wx.fmtcloud.cn` 验证可达本地 backend。
+    - [x] 7. 第 2 周：ETL 清洗脚本 + FAQ 问答对模板（FAQ_导入模板.xlsx 规范）——2026-08-14 落地：`etl/` 本地清洗包（CLI/分派器/OCR/统一 md）+ `etl/scripts/faq_to_md.py`（CSV/XLSX/MD→qa_model 格式）+ `backend/scripts/import_etl_md.py` 批量入库；真实资料全量清洗待用户提供文件（放 `etl/raw/`）。
+    - [x] 8. 第 3 周：企微微信客服消息解密后落库 + 主动推送——2026-08-14 代码全完成（验签解密→状态机→关键词拦截→dify_chat_client→wxkf 主动推送→cs_chat_logs，pytest 16/16），联调手册 docs/wxkf-runbook.md 已沉淀；⏳ 剩企微后台配回调 URL + 客服账号创建 + 三态实测（真实微信消息）。Celery 异步队列延后：消息量上来/多 worker 时再引入（当前进程内 asyncio 异步可顶住）。
     - [ ] 9. 接通负面情绪计数：`increment_negative_streak` 当前是死代码，"连续负面≥2 转人工"规则未接线（AGENT.md §3.2-3 有定义，P1#7）。
     - [x] 10. 知识驳回/删除同步删 Dify 文档 + 对账脚本（P1#6，R2）——2026-08-07 落地：reject/revoke 端点 + core_sync_tasks 对账表 + Dify DELETE（1.16.1 契约见 docs/DIFY-API-CONTRACT.md）；2026-08-12 随旧链路整体下线（迁移 c9d8e7f6a5b4 删表）。
-    - [ ] 11. ⏳ Dify 契约实测：`.env` 回填 DIFY_API_KEY/CS_QA_DATASET_ID 后运行 `backend/scripts/verify_dify_contract.py`（qa_model/text_model 创建-索引-删除全链路 + 路径探测），结果回填 docs/DIFY-API-CONTRACT.md 待实测清单。
-    - [x] 12. 双库拆分（目标态）：2026-08-12 落地——CS_DOC 库已建并配置（60c9bb5b-...），text_model 走 create_by_file 直传；工作流双检索 + Rerank 已设计（`cs_agent_chatbot.yml`，待 Dify 导入）。
+    - [x] 11. Dify 契约实测——2026-08-14 完成：`verify_dify_contract.py` 修复（trust_env=False 防代理 502、优先 DIFY_KNOWLEDGE_API_KEY、qa_model/text_model 按形态分流到 CS_QA/CS_DOC 库）后 CONTRACT OK（创建-索引-删除全链路 + 形态不匹配 400 拒绝实测），docs/DIFY-API-CONTRACT.md §6 已回填。
+    - [x] 12. 双库拆分（目标态）：2026-08-12 落地——CS_DOC 库已建并配置（60c9bb5b-...），text_model 走 create_by_file 直传；工作流双检索 + Rerank 已设计（`cs_agent_chatbot.yml`，待 Dify 导入）——2026-08-14 用户已在 Dify 控制台导入并跑通三分支（正常/高风险/低置信度），基线见 docs/CS-WORKFLOW-BASELINE.md。
     - [x] 13. 旧知识项链路下线（2026-08-12）：`core_knowledge_items`/`core_sync_tasks` 删表，手工知识项路由移除，CS 知识一律走「原文件 → 文档/版本 → Dify」；销售/doctor 域未来走「聊天记录直接导入」工作流形态（未开发）。
+    - [ ] 14. 🔴 CS_QA 库内容治理（E1）：库内为新闻时间线非 FAQ 问答对，高频问题全线召回失败且有 0.65 阈值误答风险；用 faq_to_md.py 整理真实问答对重入库（必要时先 --revoke 撤新闻文档）。
+    - [ ] 15. 发布后接口测试（S1）：Dify 控制台发布 cs_agent_chatbot → API 访问创建 app- 前缀 key → 填 .env DIFY_APP_API_KEY → 跑 `backend/scripts/smoke_chat.py` 回填速度基线（首 token 延迟/全链路耗时/token 消耗）。
+    - [ ] 16. 全量清洗入库（E4）：用户把公司资料（PPT/PDF/公众号文章/说明书）放入 `etl/raw/` → `etl\.venv\Scripts\python.exe -m etl etl\raw -o etl\out` → `import_etl_md.py --md-dir ..\etl\out` 批量入库 cs_general。
+    - [ ] 17. 召回/阈值调优（E2/E3）：观察 rerank 分数分布，试点 rerank score_threshold 0.3→0.5；「报告查询/停药」等弱命中问题进 FAQ 补强清单后复测。

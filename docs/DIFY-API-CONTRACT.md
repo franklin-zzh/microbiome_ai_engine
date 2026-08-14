@@ -100,10 +100,11 @@
 - 双库已落地（2026-08-12）：写入端 payload 结构不变，只换 `dataset_id` 与 `doc_form`；
   目标库未配置时拒绝发布（不回落另一库，避免 QA 与文本混库）。
 
-## 6. 待实测确认项（脚本输出回填）
+## 6. 待实测确认项（2026-08-14 实测回填，`backend/scripts/verify_dify_contract.py`）
 
-- [ ] legacy 下划线路径是否仍可用（后端保持 `document/create_by_text`）
-- [ ] `qa_model` 实际索引耗时与 `indexing_status` 流转
-- [ ] `text_model` 实际索引耗时与流转（create_by_file 直传路径，CS_DOC 库）
-- [ ] DELETE 后 GET 返回 404 的确认
-- [ ] `doc_language: Chinese` 对切分的影响（对比 English 默认值）
+- [x] legacy 下划线路径仍可用（后端保持 `document/create_by_text`）——实测 200（qa_model/text_model 均走 legacy 路径成功）
+- [x] `qa_model` 实际索引耗时与 `indexing_status` 流转——实测：创建 200 → `splitting`（约 15s）→ `completed`
+- [x] `text_model` 实际索引耗时与流转——实测（create_by_text 写入 CS_DOC 库）：`splitting` → `completed`；**create_by_file 直传路径留待 Phase 3 入库时实测**
+- [x] DELETE 后 GET 返回 404 的确认——实测 DELETE 204 → GET 404 `not_found`
+- [x] 形态不匹配拒绝——向 qa_model 库（Q&A for CS）写 text_model 文档 → 400 `invalid_param "doc_form is different from the dataset doc_form."`（一库一形态的预期安全行为）
+- [ ] `doc_language: Chinese` 对切分的影响（对比 English 默认值）——未测
