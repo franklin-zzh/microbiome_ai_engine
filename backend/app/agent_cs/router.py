@@ -54,6 +54,9 @@ HUMAN_HANDOFF_REPLY = "正在为您转接人工客服，请稍候。"
 DIFY_FAILBACK_REPLY = "抱歉，系统暂时繁忙，请稍后再试。"
 NON_TEXT_REPLY = "您好，我暂时只能处理文字消息，请用文字描述您的问题～"
 
+# sync_msg 拉取链路的 Redis 键 TTL（与企微消息 3 天窗口对齐）
+SYNC_CURSOR_TTL = 3 * 24 * 3600  # 游标与 msgid 去重集合的存活时间
+
 
 
 # ============ 对话日志湖 ============
@@ -362,14 +365,23 @@ async def handle_wechat_message(
             encoding_aes_key=settings.wxkf_encoding_aes_key,
             receive_id=settings.wxkf_corp_id,
         )
-        # 验签失败抛 ValueError；解密后是内层明文 XML（含 FromUserName/Content 等）
+        # 验签失败抛 ValueError；解密后是内层明文 XML（含 ExternalUserID/OpenKfId/Content 等）
         plain_xml = crypt.decrypt_msg(msg_signature, timestamp, nonce, encrypt)
         msg_root = ET.fromstring(plain_xml)
-        from_user = msg_root.findtext("FromUserName") or ""
-        to_user = msg_root.findtext("ToUserName") or ""   # 客服账号 open_kf_id（主动推送用）
-        msg_type = msg_root.findtext("MsgType") or ""
+        event = msg_root.findtext("Event") or ""
+        # 微信客服消息回调（kf_msg_received）外层 MsgType 固定为 event，
+        # 真实消息类型在 MsgType2（text/image/...）；enter_session 等纯事件无 MsgType2
+        if event == "kf_msg_received":
+            msg_type = msg_root.findtext("MsgType2") or ""
+        else:
+            msg_type = msg_root.findtext("MsgType") or ""
+        # 微信客服回调没有 FromUserName 字段：用户标识在 ExternalUserID（推送的 touser），
+        # 客服账号 open_kfid 在 OpenKfId 标签（ToUserName 是 corp_id，不能用于 kf/send_msg）
+        from_user = msg_root.findtext("ExternalUserID") or ""
+        open_kf_id = msg_root.findtext("OpenKfId") or ""
         content = msg_root.findtext("Content") or ""
         msg_id = msg_root.findtext("MsgId") or ""
+        token = msg_root.findtext("Token") or ""
     except Exception as exc:
         structured_log(
             event="wechat_kf_msg_verify_failed",
@@ -387,10 +399,32 @@ async def handle_wechat_message(
             "timestamp": timestamp,
             "from_user": from_user,
             "msg_type": msg_type,
+            "wechat_event": event,
             "content_len": len(content),
             "msg_id": msg_id,
         },
     )
+
+    # kf_msg_or_event：企微只通知「有新消息/事件」，不携带消息体（from_user/content 均为空），
+    # 需用回调里的 Token 调 sync_msg 主动拉取真实消息后再进入状态机/回复链路。
+    if event == "kf_msg_or_event":
+        structured_log(
+            event="wechat_kf_sync_notified",
+            status="NOTIFIED",
+            extra={"open_kfid": open_kf_id, "has_token": bool(token)},
+        )
+        asyncio.create_task(_sync_and_reply_async(open_kf_id, token))
+        return Response(content="success", media_type="text/plain")
+
+    # 事件类回调（enter_session / kf_msg_sent 等）：仅确认接收，不回复、不进入状态机。
+    # 若按非文本消息处理会给用户误推「只能处理文字消息」提示。
+    if msg_type == "event":
+        structured_log(
+            event="wechat_kf_event_ignored",
+            status="IGNORED",
+            extra={"from_user": from_user, "wechat_event": event, "msg_id": msg_id},
+        )
+        return Response(content="success", media_type="text/plain")
 
     # 非文本消息：暂不支持，回提示即可（不进入状态机）
     if msg_type != "text" or not content:
@@ -399,12 +433,14 @@ async def handle_wechat_message(
             status="IGNORED",
             extra={"from_user": from_user, "msg_type": msg_type, "msg_id": msg_id},
         )
-        asyncio.create_task(_push_text(to_user, from_user, NON_TEXT_REPLY))
+        asyncio.create_task(_push_text(open_kf_id, from_user, NON_TEXT_REPLY))
         return Response(content="success", media_type="text/plain")
 
     session_id = f"wxkf:{from_user}"
     # 状态机分流（Redis + DB 镜像均为毫秒级，满足 5 秒约束）：
     # 第一道防线：命中 RISK_KEYWORDS -> BLOCKED，直接回安全话术，不调 Dify（0 LLM 成本）
+    db = next(get_db())
+    redis = get_redis()
     record = _restore_state_from_db(db, redis, session_id)
     result = sm.route_incoming(redis, session_id, content)
     _lazy_cleanup_expired(db)
@@ -424,7 +460,7 @@ async def handle_wechat_message(
     asyncio.create_task(_handle_wechat_reply(
         session_id=session_id,
         open_id=from_user,
-        open_kf_id=to_user,
+        open_kf_id=open_kf_id,
         user_message=content,
         state=result["state"],
         hit_keyword=result["hit_keyword"],
@@ -587,3 +623,122 @@ async def _handle_wechat_reply(
             error_msg=str(exc),
             extra={"session_id": session_id},
         )
+
+
+# ============ kf_msg_or_event：sync_msg 拉取链路（回调只通知不携带消息体） ============
+
+
+def _route_synced_msg(redis: Redis, open_kfid: str, msg: dict) -> Optional[dict]:
+    """处理 sync_msg 拉到的单条消息：仅「微信客户发送的文本」，做幂等去重 + 状态机分流。
+
+    返回待回复任务参数 dict（session_id/open_id/open_kf_id/user_message/state/hit_keyword）；
+    不满足条件（非 origin=3 / 非 text / 无内容 / 已处理过）返回 None。
+    """
+    if msg.get("origin") != 3 or msg.get("msgtype") != "text":
+        return None
+    content = (msg.get("text") or {}).get("content") or ""
+    external_userid = msg.get("external_userid") or ""
+    msgid = msg.get("msgid") or ""
+    if not content or not external_userid:
+        return None
+
+    # msgid 幂等去重：防游标丢失/并发重复拉取导致的重复回复
+    dedup_key = f"wxkf:synced_msgid:{msgid}"
+    if not redis.sadd(dedup_key, 1):
+        return None
+    redis.expire(dedup_key, SYNC_CURSOR_TTL)
+
+    session_id = f"wxkf:{external_userid}"
+    db = next(get_db())
+    try:
+        record = _restore_state_from_db(db, redis, session_id)
+        result = sm.route_incoming(redis, session_id, content)
+        _lazy_cleanup_expired(db)
+        _persist_route_state(db, record, session_id, result, channel="WXKF", open_id=external_userid)
+    finally:
+        db.close()
+
+    structured_log(
+        event="wechat_kf_route",
+        status=result["state"],
+        extra={
+            "session_id": session_id,
+            "hit_keyword": result["hit_keyword"],
+            "should_answer": result["should_answer"],
+            "source": "sync_msg",
+        },
+    )
+    return {
+        "session_id": session_id,
+        "open_id": external_userid,
+        "open_kf_id": open_kfid,
+        "user_message": content,
+        "state": result["state"],
+        "hit_keyword": result["hit_keyword"],
+    }
+
+
+def _sync_and_collect(open_kfid: str, token: str) -> list:
+    """同步：用 Token 调 sync_msg 增量拉取消息并逐条分流，返回待回复任务参数列表"""
+    redis = get_redis()
+    if not open_kfid:
+        structured_log(
+            event="wxkf_sync_skipped",
+            status="SKIPPED",
+            extra={"reason": "no open_kfid"},
+        )
+        return []
+
+    cursor_key = f"wxkf:sync_cursor:{open_kfid}"
+    cursor = redis.get(cursor_key) or ""
+    to_reply = []
+
+    # 分页：has_more=1 时继续，最多 5 页防异常死循环（正常一次即可拉完）
+    for _ in range(5):
+        try:
+            data = wxkf_client.sync_msg(open_kfid, token=token, cursor=cursor)
+        except WxKfError as exc:
+            structured_log(
+                event="wxkf_sync_failed",
+                status="FAILED",
+                error_msg=str(exc),
+                extra={"open_kfid": open_kfid},
+            )
+            break
+
+        for msg in data.get("msg_list") or []:
+            item = _route_synced_msg(redis, open_kfid, msg)
+            if item:
+                to_reply.append(item)
+
+        next_cursor = data.get("next_cursor") or ""
+        if next_cursor:
+            redis.set(cursor_key, next_cursor, ex=SYNC_CURSOR_TTL)
+            cursor = next_cursor
+        if not data.get("has_more"):
+            break
+
+    return to_reply
+
+
+async def _sync_and_reply_async(open_kfid: str, token: str) -> None:
+    """kf_msg_or_event 后台协程：sync_msg 网络/DB 逻辑放线程池，回复任务回事件循环调度"""
+    try:
+        to_reply = await asyncio.to_thread(_sync_and_collect, open_kfid, token)
+    except Exception as exc:
+        structured_log(
+            event="wechat_kf_sync_task_error",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"open_kfid": open_kfid},
+        )
+        return
+    for item in to_reply:
+        asyncio.create_task(_handle_wechat_reply(
+            session_id=item["session_id"],
+            open_id=item["open_id"],
+            open_kf_id=item["open_kf_id"],
+            user_message=item["user_message"],
+            state=item["state"],
+            hit_keyword=item["hit_keyword"],
+        ))

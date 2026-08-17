@@ -14,11 +14,11 @@
 |---|---|---|
 | 回调路由（GET 校验 + POST 验签解密） | ✅ 代码完成 | `backend/app/agent_cs/router.py`，挂载于根前缀 `/wx/msg` |
 | 加解密工具 | ✅ 代码完成 | `backend/app/clients/wx/wxbizmsgcrypt.py`（官方 WXBizMsgCrypt） |
-| 主动推送客户端 | ✅ 代码完成 | `backend/app/clients/wx/wxkf_client.py`：gettoken + `kf/send_msg` |
+| 主动推送/拉取客户端 | ✅ 代码完成 | `backend/app/clients/wx/wxkf_client.py`：gettoken + `kf/send_msg` + `kf/sync_msg` |
 | Dify 对话客户端 | ✅ 代码完成 | `backend/app/clients/dify_chat_client.py`：`chat-messages` blocking |
 | 状态机分流 | ✅ 代码完成 | `backend/app/agent_cs/services.py`：NORMAL / HUMAN_MODE / BLOCKED |
 | 日志湖落库 | ✅ 代码完成 | `cs_chat_logs`（channel=WXKF），含 RAG 召回切片与 meta |
-| 自动化测试 | ✅ 16 个通过 | `backend/tests/`（含 `test_wxkf_client.py`、`test_wechat_reply.py`） |
+| 自动化测试 | ✅ 51 个通过 | `backend/tests/`（含 `test_wxkf_client.py`、`test_wechat_reply.py`） |
 | `.env` 企微密钥 | ✅ 已填 | `WXKF_CORP_ID / WXKF_SECRET / WXKF_TOKEN / WXKF_ENCODING_AES_KEY` |
 | frp 隧道 | ✅ 已打通 | frps token 已同步；`https://wx.fmtcloud.cn` 可访问本地 backend |
 | E7 回答泄漏 `<think>` | ✅ 已修复 | Dify 控制台已加剥离处理，不再输出思考内容 |
@@ -81,7 +81,7 @@ Dify（192.168.110.16:3080）── POST /v1/chat-messages（blocking）拿回�
 | `backend/app/agent_cs/router.py` | 微信回调路由（`/wx/msg` GET 校验 + POST 消息）、后台回复链路、`cs_chat_logs` 落库 |
 | `backend/app/agent_cs/services.py` | Redis 会话状态机：`get_state / set_state / mark_human / mark_blocked / reset`、`route_incoming` 分流、关键词表 |
 | `backend/app/clients/wx/wxbizmsgcrypt.py` | 企微官方加解密：`decrypt_echo_str`（GET 校验）、`decrypt_msg`（POST 验签+解密） |
-| `backend/app/clients/wx/wxkf_client.py` | `get_access_token`（Redis 缓存 7000s，官方 7200s 提前刷新；errcode 40014/42001/4502 失效自动重试）、`send_kf_text(open_kf_id, touser, content)` → `POST cgi-bin/kf/send_msg` |
+| `backend/app/clients/wx/wxkf_client.py` | `get_access_token`（Redis 缓存 7000s，官方 7200s 提前刷新；errcode 40014/42001/4502 失效自动重试）、`send_kf_text(open_kf_id, touser, content)` → `POST cgi-bin/kf/send_msg`、`sync_msg(open_kfid, token, cursor)` → `POST cgi-bin/kf/sync_msg`（拉取消息） |
 | `backend/app/clients/dify_chat_client.py` | `chat_messages(query, user, conversation_id)` → `POST /chat-messages`（blocking），`trust_env=False` 防代理 502；key 取 `DIFY_CHAT_API_KEY`，留空回退 `DIFY_API_KEY` |
 | `backend/main.py` | 挂载：`app.include_router(wechat_router, prefix="")` → 回调 URL `https://wx.fmtcloud.cn/wx/msg` |
 | `backend/tests/test_wxkf_client.py` | access_token 缓存 / 主动推送 / token 失效重试 |
@@ -93,7 +93,8 @@ Dify（192.168.110.16:3080）── POST /v1/chat-messages（blocking）拿回�
 - **POST `/wx/msg`**（真实消息回调）：参数同上，body 为企微标准 XML（含 `<Encrypt>`）：
   - 空 body → 400；body > 1MB → 413；XML 解析失败 → 400；缺 `<Encrypt>` → 400；
   - 验签/解密失败 → 400（事件 `wechat_kf_msg_verify_failed`）；
-  - 解密后取字段：`FromUserName`（用户 open_userid）、`ToUserName`（**客服账号 open_kfid**，主动推送用）、`MsgType`、`Content`、`MsgId`；
+  - 解密后取字段：`Event`（事件类型，如 `kf_msg_received` / `enter_session` / `kf_msg_or_event`）、`MsgType2`（消息真实类型，仅 kf_msg_received 存在）、`ExternalUserID`（**用户外部联系人 ID**，推送的 touser；微信客服回调**没有** `FromUserName` 字段）、`OpenKfId`（**客服账号 open_kfid**，推送的 open_kf_id；`ToUserName` 是 corp_id 不能用于推送）、`Token`、`Content`、`MsgId`；
+  - **`kf_msg_or_event`**（企微只通知「有新消息/事件」，不携带消息体，`from_user`/`content` 均为空）：用回调里的 `Token` + `OpenKfId` 调 `sync_msg` 主动拉取消息，再逐条走状态机 + 回复（`_sync_and_reply_async`）；
   - 非文本消息 → 回 `NON_TEXT_REPLY` 提示，不进入状态机（事件 `wechat_kf_msg_ignored`）；
   - 会话标识：`session_id = "wxkf:{from_user}"`。
 
@@ -192,8 +193,8 @@ RISK_BLOCKED_REPLY=                    # 命中高风险关键词的预设话术
 
 - 「微信客服」→「客服账号」→ 新建客服账号（如「AI 健康顾问」）。
 - 记下该账号的 **open_kfid**（联调时用于确认是哪个账号收到消息）。
-- **无需回填到 `.env`**：用户给该账号发消息时，回调消息里的 `ToUserName` 就是 open_kfid，
-  后端直接用它做 `kf/send_msg` 主动推送（`router.py` 第 427 行 `open_kf_id=to_user`）。
+- **无需回填到 `.env`**：用户给该账号发消息时，回调消息里的 `OpenKfId` 就是 open_kfid，
+  后端直接用它做 `kf/send_msg` 主动推送（`router.py` 第 448 行 `open_kf_id=open_kf_id`）。
 - 客服账号需在「接待人员」中至少添加一名成员，且企业微信需开启「微信客服」应用权限。
 
 ### 4.6 配置核对表
@@ -237,7 +238,7 @@ cd backend
 .venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
-预期：全部通过（16 个，含 wxkf 验签/推送/落库用例）。提交流程前必须全绿。
+预期：全部通过（51 个，含 wxkf 验签/推送/拉取/落库用例）。提交流程前必须全绿。
 
 ### 5.3 frp 隧道预检
 
@@ -281,7 +282,10 @@ curl "https://wx.fmtcloud.cn/wx/msg?msg_signature=x&timestamp=1&nonce=x&echostr=
 |---|---|
 | `wechat_kf_verify_success` | GET URL 校验通过（回明文 echostr） |
 | `wechat_kf_verify_error` / `wechat_kf_verify_failed` | GET 校验失败 / 未配置密钥 |
-| `wechat_kf_msg_received` | POST 消息接收（记录 from_user / msg_type / content_len / msg_id，**不存原文**） |
+| `wechat_kf_msg_received` | POST 消息接收（记录 from_user=ExternalUserID / msg_type / wechat_event / content_len / msg_id，**不存原文**） |
+| `wechat_kf_sync_notified` | 收到 `kf_msg_or_event` 通知（只带 open_kfid/token，即将触发 sync_msg 拉取） |
+| `wxkf_sync_failed` / `wxkf_sync_skipped` | sync_msg 拉取失败 / 无 open_kfid 跳过 |
+| `wechat_kf_sync_task_error` | sync 拉取后台任务异常 |
 | `wechat_kf_msg_ignored` | 非文本消息（回 NON_TEXT_REPLY） |
 | `wechat_kf_route` | 状态机分流结果（state / hit_keyword / should_answer） |
 | `wxkf_send_msg` | 主动推送成功（含 msgid） |
@@ -297,7 +301,7 @@ curl "https://wx.fmtcloud.cn/wx/msg?msg_signature=x&timestamp=1&nonce=x&echostr=
 |---|---|
 | `channel` | `WXKF` |
 | `session_id` | `wxkf:{from_user}` |
-| `open_id` | 用户 open_userid |
+| `open_id` | 用户外部联系人 ID（ExternalUserID） |
 | `user_message` / `ai_reply` | 原文 / 回复 |
 | `hit_human` | BLOCKED 与 HUMAN_MODE 均为 `true` |
 | `risk_flag` | 仅 BLOCKED 为 `true` |
@@ -358,13 +362,14 @@ ORDER BY id DESC LIMIT 10;
 | 1 | 企微后台保存回调 URL 失败 | Token / EncodingAESKey 与 `.env` 不一致；backend 未启动；frp 隧道断 | 核对 §4.6；确认本地 8000 起；`curl https://wx.fmtcloud.cn/health`；看日志 `wechat_kf_verify_error` |
 | 2 | `wechat_kf_verify_failed`（500） | `.env` 缺 `WXKF_TOKEN` / `WXKF_ENCODING_AES_KEY` | 补全后重启 backend |
 | 3 | POST 消息一直 400 `wechat_kf_msg_verify_failed` | Token / EncodingAESKey / CorpID 与后台不一致（多为 EncodingAESKey 位数或大小写） | 逐字符核对 §4.6；重启 backend 使新配置生效 |
-| 4 | 微信收不到回复 | ① `wxkf_push_skipped`：回调里 `ToUserName` 为空 → 客服账号问题；② `wxkf_push_failed`：access_token 失效或 Secret 错；③ Dify 慢/挂 | 看对应事件日志；`gettoken` 手动调一次核对 Secret；确认 Dify 控制台会话在跑 |
+| 4 | 微信收不到回复 | ① `wxkf_push_skipped`：回调里 `OpenKfId` 为空 → 客服账号问题；② `wxkf_push_failed`：access_token 失效或 Secret 错；③ Dify 慢/挂 | 看对应事件日志；`gettoken` 手动调一次核对 Secret；确认 Dify 控制台会话在跑 |
 | 5 | 回复内容带 `<think>...</think>` | Dify 工作流 answer_llm 未剥离思考内容（E7 复发） | Dify 控制台检查剥离节点，`smoke_chat.py` 复测 |
 | 6 | 回包超 5 秒 | Dify 阻塞（正常分支基线 10.1s，属正常范围——后台异步不受影响）；Redis/MySQL 慢 | 看 `cs_chat_log_written` 时间与推送时间差；正常分支慢见 CS-ISSUE-LOG S3 观察项 |
 | 7 | `curl https://wx.fmtcloud.cn` 超时 / 502 | frpc 未启动；frps token 不一致被拒；nginx 未 reload；本地 backend 未起 | 本地起 frpc 看日志；服务器 `docker logs frps`；`curl http://127.0.0.1:6001`（服务器侧）；`systemctl reload nginx` |
 | 8 | Dify 返回 401 / 404 | key 前缀不对：对话要用 app- 前缀（`DIFY_CHAT_API_KEY` 或回退 `DIFY_API_KEY`），知识库才是 dataset- 前缀 | 确认 `.env`；`dify_chat_client` 日志；`docs/DIFY-API-CONTRACT.md` |
 | 9 | `cs_chat_logs` 无新记录 | MySQL 未起 / Alembic 未迁移 / `alembic upgrade head` 未执行 | `docker compose logs backend`；`cd backend && .venv\Scripts\python.exe -m alembic upgrade head` |
-| 10 | 中文日志乱码 | PowerShell GBK 控制台 | 运行前 `chcp 65001` 或 `$env:PYTHONIOENCODING="utf-8"` |
+| 10 | 收到 `wechat_kf_msg_received` 但 `wechat_event=kf_msg_or_event`、`content_len=0`，或日志只有 `wechat_kf_sync_notified` 却无回复 | 客服账号走「事件通知 + sync_msg 拉取」模式：回调只带 `Token`+`OpenKfId` 不带消息体（不是未勾选消息类型），需后端调 `sync_msg` 拉取（已实现于 `router.py _sync_and_reply_async`） | 确认 backend 已重启加载新代码；重发消息，日志应出现 `wechat_kf_sync_notified` → `wechat_kf_route(source=sync_msg)` → `wxkf_send_msg` → `cs_chat_log_written`；若出现 `wxkf_sync_failed` 看 errcode/errmsg（多为 access_token/Secret 或回调 Token 过期） |
+| 11 | 中文日志乱码 | PowerShell GBK 控制台 | 运行前 `chcp 65001` 或 `$env:PYTHONIOENCODING="utf-8"` |
 
 ---
 
@@ -372,7 +377,7 @@ ORDER BY id DESC LIMIT 10;
 
 - [ ] 企微后台：回调 URL / Token / EncodingAESKey 与 `.env` 一致（§4.6 全勾）
 - [ ] 客服账号已创建，微信侧可进入会话
-- [ ] `pytest tests/ -v` 全绿（16 个）
+- [ ] `pytest tests/ -v` 全绿（51 个）
 - [ ] `curl https://wx.fmtcloud.cn/health` 返回 backend 内容（frp 链路通）
 - [ ] NORMAL 态：微信收到 AI 回复，`cs_chat_logs` 有 `meta.route="dify"` 记录，多轮续聊正常
 - [ ] BLOCKED 态：发「便血」回安全话术，0 LLM 调用，`risk_flag=true`

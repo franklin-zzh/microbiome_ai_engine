@@ -2,14 +2,17 @@
 
 - BLOCKED：推送预设安全话术（不调 Dify），日志湖 risk_flag=True；
 - Dify 调用失败：回兜底话术；
-- Dify 正常：推送回答 + 记录 conversation_id（续聊）+ 日志湖。
+- Dify 正常：推送回答 + 记录 conversation_id（续聊）+ 日志湖；
+- 回调入口：事件类回调（enter_session 等）确认接收但不推送。
 
 网络层 mock；DB 用测试库（conftest 已建表）；Redis 用本地实例，测试后清理。
 """
+import asyncio
+import inspect
 import sys
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -180,3 +183,170 @@ def test_process_and_reply_human_mode(monkeypatch):
         ).mappings().first()
     assert row is not None and row["hit_human"] == 1
     _cleanup(session_id)
+
+
+# ---------- 回调入口：事件类回调只确认不推送 ----------
+
+
+def test_callback_event_enter_session_ignored_without_push():
+    """enter_session 等 MsgType=event 回调：回 success，不推送 NON_TEXT_REPLY、不进状态机
+
+    官方结构：ToUserName=corpid，用户标识在 ExternalUserID，无 FromUserName 字段。
+    """
+    event_xml = (
+        "<xml><ToUserName>wwd5f2644ae2a6a894</ToUserName>"
+        "<CreateTime>1786694780</CreateTime>"
+        "<MsgType>event</MsgType>"
+        "<Event>enter_session</Event>"
+        "<Token>tok</Token>"
+        "<OpenKfId>kfcb565b8d785380f0b</OpenKfId>"
+        "<ExternalUserID>wm-xxx</ExternalUserID></xml>"
+    )
+
+    class FakeCrypt:
+        def decrypt_msg(self, *args, **kwargs):
+            return event_xml
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"<xml><Encrypt>abc</Encrypt></xml>")
+    with patch("app.agent_cs.router.WXBizMsgCrypt", return_value=FakeCrypt()):
+        with patch("app.agent_cs.router.wxkf_client.send_kf_text") as send:
+            resp = asyncio.run(
+                router.handle_wechat_message(request, "msg_signature", "timestamp", "nonce")
+            )
+    assert resp.status_code == 200
+    assert resp.body == b"success"
+    send.assert_not_called()
+
+
+def test_callback_kf_msg_received_text_enters_reply_chain():
+    """微信客服消息回调（官方结构）：MsgType=event/Event=kf_msg_received 包裹，真实类型在
+    MsgType2=text；用户标识 ExternalUserID、客服账号 OpenKfId（无 FromUserName 字段），
+    应进入状态机分流与后台回复链路，而不是被当事件忽略"""
+    msg_xml = (
+        "<xml><ToUserName>wwd5f2644ae2a6a894</ToUserName>"
+        "<CreateTime>1786694780</CreateTime>"
+        "<MsgType>event</MsgType>"
+        "<Event>kf_msg_received</Event>"
+        "<Token>tok</Token>"
+        "<OpenKfId>wkcjQPZwAAkcyTYAuysTSLaVIYMqP7lg</OpenKfId>"
+        "<MsgType2>text</MsgType2>"
+        "<Content>你好</Content>"
+        "<MsgId>msg-123</MsgId>"
+        "<ExternalUserID>wmcjQPZwAAnZwCWGefvaCIEGvWfGDccw</ExternalUserID></xml>"
+    )
+
+    class FakeCrypt:
+        def decrypt_msg(self, *args, **kwargs):
+            return msg_xml
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"<xml><Encrypt>abc</Encrypt></xml>")
+    with patch("app.agent_cs.router.WXBizMsgCrypt", return_value=FakeCrypt()):
+        with patch("app.agent_cs.router.get_db") as get_db, \
+                patch("app.agent_cs.router.get_redis") as get_redis, \
+                patch("app.agent_cs.router._restore_state_from_db", return_value=None), \
+                patch(
+                    "app.agent_cs.router.sm.route_incoming",
+                    return_value={"state": "NORMAL", "hit_keyword": None, "should_answer": True},
+                ) as route, \
+                patch("app.agent_cs.router._lazy_cleanup_expired"), \
+                patch("app.agent_cs.router._persist_route_state") as persist, \
+                patch("app.agent_cs.router.asyncio.create_task") as create_task:
+            resp = asyncio.run(
+                router.handle_wechat_message(request, "msg_signature", "timestamp", "nonce")
+            )
+    assert resp.status_code == 200
+    assert resp.body == b"success"
+    # 消息进入了状态机分流（而非被 event 忽略）
+    route.assert_called_once()
+    assert route.call_args.args[1] == "wxkf:wmcjQPZwAAnZwCWGefvaCIEGvWfGDccw"
+    assert route.call_args.args[2] == "你好"
+    persist.assert_called_once()
+    # 后台回复任务被调度；open_kf_id 必须取自 OpenKfId（而非 ToUserName=corpid）
+    create_task.assert_called_once()
+    task_coro = create_task.call_args.args[0]
+    assert inspect.iscoroutine(task_coro)
+    assert task_coro.cr_frame.f_locals["open_kf_id"] == "wkcjQPZwAAkcyTYAuysTSLaVIYMqP7lg"
+
+
+def test_callback_kf_msg_or_event_schedules_sync():
+    """kf_msg_or_event：只通知不携带消息体，应调度 _sync_and_reply_async 并回 success"""
+    msg_xml = (
+        "<xml><ToUserName>wwd5f2644ae2a6a894</ToUserName>"
+        "<CreateTime>1786694780</CreateTime>"
+        "<MsgType>event</MsgType>"
+        "<Event>kf_msg_or_event</Event>"
+        "<Token>tok-123</Token>"
+        "<OpenKfId>wkcjQPZwAAkcyTYAuysTSLaVIYMqP7lg</OpenKfId></xml>"
+    )
+
+    class FakeCrypt:
+        def decrypt_msg(self, *args, **kwargs):
+            return msg_xml
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"<xml><Encrypt>abc</Encrypt></xml>")
+    with patch("app.agent_cs.router.WXBizMsgCrypt", return_value=FakeCrypt()):
+        with patch("app.agent_cs.router.asyncio.create_task") as create_task:
+            resp = asyncio.run(
+                router.handle_wechat_message(request, "msg_signature", "timestamp", "nonce")
+            )
+    assert resp.status_code == 200
+    assert resp.body == b"success"
+    # 调度的是 sync 拉取任务，且 open_kfid / token 取自回调 XML
+    create_task.assert_called_once()
+    task_coro = create_task.call_args.args[0]
+    assert inspect.iscoroutine(task_coro)
+    assert task_coro.cr_frame.f_locals["open_kfid"] == "wkcjQPZwAAkcyTYAuysTSLaVIYMqP7lg"
+    assert task_coro.cr_frame.f_locals["token"] == "tok-123"
+
+
+def test_sync_and_collect_routes_text_and_dedups(monkeypatch):
+    """sync_msg 拉取链路：仅 origin=3 的文本进入状态机分流，且 msgid 幂等去重"""
+    monkeypatch.setattr("app.agent_cs.router.get_db", _test_db_gen)
+    redis = get_redis()
+    msgid = f"sync-{uuid.uuid4()}"
+    cursor_key = "wxkf:sync_cursor:kf-sync"
+    dedup_key = f"wxkf:synced_msgid:{msgid}"
+    redis.delete(cursor_key, dedup_key)
+
+    sync_resp = {
+        "errcode": 0, "next_cursor": "cur-1", "has_more": 0,
+        "msg_list": [
+            {"msgid": msgid, "open_kfid": "kf-sync", "external_userid": "wm-user",
+             "send_time": 1, "origin": 3, "msgtype": "text", "text": {"content": "你好"}},
+            # origin=4 系统事件，应被忽略
+            {"msgid": "evt-1", "open_kfid": "kf-sync", "external_userid": "",
+             "send_time": 2, "origin": 4, "msgtype": "event",
+             "event": {"event_type": "enter_session"}},
+        ],
+    }
+    route_ret = {"state": "NORMAL", "hit_keyword": None, "should_answer": True}
+
+    try:
+        with patch("app.agent_cs.router.wxkf_client.sync_msg", return_value=sync_resp), \
+                patch("app.agent_cs.router._restore_state_from_db", return_value=None), \
+                patch("app.agent_cs.router._lazy_cleanup_expired"), \
+                patch("app.agent_cs.router._persist_route_state") as persist, \
+                patch("app.agent_cs.router.sm.route_incoming", return_value=route_ret) as route:
+            to_reply = router._sync_and_collect("kf-sync", "tok")
+
+        assert len(to_reply) == 1
+        assert to_reply[0]["user_message"] == "你好"
+        assert to_reply[0]["open_id"] == "wm-user"
+        assert to_reply[0]["open_kf_id"] == "kf-sync"
+        route.assert_called_once()
+        persist.assert_called_once()
+
+        # 第二次拉同一批：msgid 已去重，不再分流
+        with patch("app.agent_cs.router.wxkf_client.sync_msg", return_value=sync_resp), \
+                patch("app.agent_cs.router._restore_state_from_db", return_value=None), \
+                patch("app.agent_cs.router._lazy_cleanup_expired"), \
+                patch("app.agent_cs.router._persist_route_state") as persist2, \
+                patch("app.agent_cs.router.sm.route_incoming", return_value=route_ret) as route2:
+            to_reply2 = router._sync_and_collect("kf-sync", "tok")
+        assert to_reply2 == []
+        route2.assert_not_called()
+    finally:
+        redis.delete(cursor_key, dedup_key)

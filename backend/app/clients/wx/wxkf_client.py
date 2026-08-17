@@ -3,6 +3,7 @@
 回调链路（接收用户消息 -> 后端处理 -> 主动推送回复）需要主动调用企微 API：
 - ``gettoken``：corpid + secret 换 access_token（Redis 缓存，官方 7200s，提前刷新）
 - ``kf/send_msg``：微信客服主动发消息（用户进入会话后可回复）
+- ``kf/sync_msg``：同步拉取客服账号消息（``kf_msg_or_event`` 通知后调用，回调只带 Token/OpenKfId 不带消息体）
 
 公众号（MP）推送走另一套 ``cgi-bin/message/custom/send``，后续接入时按渠道分发。
 """
@@ -62,8 +63,8 @@ def get_access_token(force_refresh: bool = False) -> str:
 def send_kf_text(open_kf_id: str, touser: str, content: str) -> Optional[str]:
     """微信客服主动发送文本消息，返回 msgid（失败抛 WxKfError）。
 
-    :param open_kf_id: 客服账号 open_kfid（回调消息里的 ToUserName）；
-    :param touser: 用户 open_userid（回调消息里的 FromUserName）。
+    :param open_kf_id: 客服账号 open_kfid（回调消息里的 OpenKfId）；
+    :param touser: 用户外部联系人 ID（回调消息里的 ExternalUserID）。
     """
     if not content:
         return None
@@ -100,3 +101,51 @@ def send_kf_text(open_kf_id: str, touser: str, content: str) -> Optional[str]:
         extra={"touser": touser, "msg_len": len(content), "msgid": data.get("msgid")},
     )
     return data.get("msgid")
+
+
+def sync_msg(
+    open_kfid: str,
+    token: str = "",
+    cursor: str = "",
+    limit: int = 1000,
+    voice_format: int = 0,
+) -> dict:
+    """同步拉取客服账号消息（``kf_msg_or_event`` 通知后调用），失败抛 WxKfError。
+
+    :param open_kfid: 客服账号 open_kfid（回调里的 OpenKfId，必填）
+    :param token: 回调事件里的 Token（10 分钟内有效；可不填，不填有严格频控）
+    :param cursor: 上次返回的 next_cursor（增量拉取；首次为空则从 3 天内最早消息开始）
+    :param limit: 单次条数上限（默认/最大 1000）
+    :param voice_format: 0-Amr 1-Silk，默认 0
+    :return: {"errcode":0, "next_cursor":..., "has_more":0/1, "msg_list":[...]}
+    """
+    body: dict = {"open_kfid": open_kfid, "limit": limit, "voice_format": voice_format}
+    if token:
+        body["token"] = token
+    if cursor:
+        body["cursor"] = cursor
+
+    def _call(access_token: str) -> dict:
+        resp = httpx.post(
+            f"{WXKF_API_BASE}/cgi-bin/kf/sync_msg",
+            params={"access_token": access_token},
+            json=body,
+            timeout=15,
+        )
+        return resp.json()
+
+    try:
+        data = _call(get_access_token())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise WxKfError(f"kf/sync_msg request failed: {type(exc).__name__}") from exc
+
+    # token 失效：清缓存重取重试一次
+    if data.get("errcode") in TOKEN_INVALID_ERRCODES:
+        try:
+            data = _call(get_access_token(force_refresh=True))
+        except (httpx.HTTPError, ValueError) as exc:
+            raise WxKfError(f"kf/sync_msg retry failed: {type(exc).__name__}") from exc
+
+    if data.get("errcode") != 0:
+        raise WxKfError(f"kf/sync_msg failed: {data.get('errcode')} {data.get('errmsg')}")
+    return data
