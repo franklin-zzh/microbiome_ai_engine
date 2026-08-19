@@ -1,0 +1,57 @@
+# ==============================================================================
+# agent_cs 生产级 Docker Compose 编排 (阿里云部署)
+# 
+# 特性：
+# 1. 内存硬限制 512MB，CPU 限制 1.0 核
+# 2. 日志自动轮转（单个上限 20MB，最多保留 3 个，总大小 <= 60MB）
+# 3. 端口独占绑定 127.0.0.1:13006（仅供宿主机大 Nginx 反向代理）
+# 4. 容器启动自动执行 Alembic 数据库 Schema 迁移
+# 5. Gunicorn 双 Worker 运行，每 1000 请求平滑重启防内存泄漏
+# ==============================================================================
+services:
+  backend:
+    image: agent_cs_backend:latest
+    container_name: agent_cs_backend
+    restart: always
+    
+    # 资源配额限制 (生产严格防爆内存)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    # 容器标准输出日志上限控制 (防止占满磁盘)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+    # 仅绑定宿主机本地 13006 端口
+    ports:
+      - "127.0.0.1:13006:13006"
+
+    # 生产环境变量注入
+    env_file:
+      - .env.prod
+
+    # 持久化挂载目录
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+    # 启动命令：先执行数据库版本迁移，再拉起 Gunicorn 多进程服务
+    command: >
+      sh -c "alembic upgrade head && 
+             gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:13006 --max-requests 1000 --max-requests-jitter 100 --access-logfile - --error-logfile -"
+
+    # 接入既有的内部容器网络 fmtsw-net
+    networks:
+      - fmtsw-net
+networks:
+  fmtsw-net:
+    external: true
+    name: fmtsw-infra_fmtsw-net

@@ -1,11 +1,14 @@
 app:
   description: '挂载 CS_QA + CS_DOC 双知识库，回答肠菌检测/调养客服问题。
 
-    后端已做高风险关键词拦截（第一道），本工作流 risk_guard 语义兑底（第二道）；
 
-    QA 库语义检索 + DOC 库混合检索（各自内置 Rerank）-> 合并按分排序 -> LLM 作答；
+    后端已做高风险关键词拦截（第一道），本工作流 risk_guard 语义兜底（第二道）；
 
-    语义兑底命中或检索为空时触发转人工，并回调后端捕获未解答问题。
+
+    术语大小写归一化 + 多轮指代检索改写 -> QA 库语义检索 + DOC 库混合检索（各自内置 Rerank）-> 合并按分排序 -> LLM 作答（带多轮记忆）；
+
+
+    语义兜底命中或检索为空时触发转人工，并回调后端捕获未解答问题。
 
     '
   icon: 🤖
@@ -79,21 +82,14 @@ workflow:
         - local_file
         - remote_url
       number_limits: 3
-    opening_statement: '您好，我是「肠道健康」品牌的智能客服助手，可以为您解答肠菌检测流程、报告解读（非诊断）、
-
-      肠道健康科普以及产品与调养服务相关问题。请问有什么可以帮您？
-
-      '
+    opening_statement: ''
     retriever_resource:
-      enabled: true
+      enabled: false
     sensitive_word_avoidance:
       enabled: false
     speech_to_text:
       enabled: false
-    suggested_questions:
-    - 肠菌检测怎么做？流程是什么？
-    - 检测报告怎么看？
-    - 肠道调理服务有哪些？
+    suggested_questions: []
     suggested_questions_after_answer:
       enabled: false
     text_to_speech:
@@ -110,6 +106,7 @@ workflow:
         sourceType: code
         targetType: if-else
       id: 1786676257638-source-risk_branch-target
+      selected: false
       source: '1786676257638'
       sourceHandle: source
       target: risk_branch
@@ -121,13 +118,28 @@ workflow:
         isInLoop: false
         iteration_id: null
         loop_id: null
-        sourceType: llm
+        sourceType: code
         targetType: answer
-      id: e-answer_llm-answer_main
+      id: 17866912012510-source-answer_main-target
+      selected: false
+      source: '17866912012510'
+      sourceHandle: source
+      target: answer_main
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: llm
+        targetType: code
+      id: answer_llm-source-17866912012510-target
       selected: false
       source: answer_llm
       sourceHandle: source
-      target: answer_main
+      target: '17866912012510'
       targetHandle: target
       type: custom
       zIndex: 0
@@ -188,36 +200,6 @@ workflow:
       source: merge_docs
       sourceHandle: source
       target: score_branch
-      targetHandle: target
-      type: custom
-      zIndex: 0
-    - data:
-        isInIteration: false
-        isInLoop: false
-        iteration_id: null
-        loop_id: null
-        sourceType: if-else
-        targetType: knowledge-retrieval
-      id: e-risk_branch-false-knowledge_retrieval_doc
-      selected: false
-      source: risk_branch
-      sourceHandle: 'false'
-      target: knowledge_retrieval_doc
-      targetHandle: target
-      type: custom
-      zIndex: 0
-    - data:
-        isInIteration: false
-        isInLoop: false
-        iteration_id: null
-        loop_id: null
-        sourceType: if-else
-        targetType: knowledge-retrieval
-      id: e-risk_branch-false-knowledge_retrieval_qa
-      selected: false
-      source: risk_branch
-      sourceHandle: 'false'
-      target: knowledge_retrieval_qa
       targetHandle: target
       type: custom
       zIndex: 0
@@ -341,6 +323,81 @@ workflow:
       targetHandle: target
       type: custom
       zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: code
+      id: e-risk_branch-false-normalize_query
+      selected: false
+      source: risk_branch
+      sourceHandle: 'false'
+      target: normalize_query
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: llm
+      id: e-normalize_query-query_rewriter
+      selected: false
+      source: normalize_query
+      sourceHandle: source
+      target: query_rewriter
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: llm
+        targetType: code
+      id: e-query_rewriter-extract_query
+      selected: false
+      source: query_rewriter
+      sourceHandle: source
+      target: extract_query
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: knowledge-retrieval
+      id: e-extract_query-knowledge_retrieval_qa
+      selected: false
+      source: extract_query
+      sourceHandle: source
+      target: knowledge_retrieval_qa
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: knowledge-retrieval
+      id: e-extract_query-knowledge_retrieval_doc
+      selected: false
+      source: extract_query
+      sourceHandle: source
+      target: knowledge_retrieval_doc
+      targetHandle: target
+      type: custom
+      zIndex: 0
     nodes:
     - data:
         code: "def main(llm_text: str) -> dict:\n    import re\n    text = re.sub(r\"\
@@ -361,14 +418,55 @@ workflow:
           - text
           value_type: string
           variable: llm_text
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 52
       id: '1786676257638'
       position:
-        x: 269.7703797098291
-        y: 397.23047532495553
+        x: 257.1346978048617
+        y: 402.2973967099941
       positionAbsolute:
-        x: 269.7703797098291
-        y: 397.23047532495553
+        x: 257.1346978048617
+        y: 402.2973967099941
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        code: "def main(llm_text: str) -> dict:\n    import re\n    text = re.sub(r\"\
+          <think>.*?</think>\", \"\", llm_text or \"\", flags=re.S)\n    return {\"\
+          answer\": text}"
+        code_language: python3
+        desc: ''
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        outputs:
+          answer:
+            children: null
+            type: string
+        selected: false
+        title: LLM结果提取 (1)
+        type: code
+        variables:
+        - value_selector:
+          - answer_llm
+          - text
+          value_type: string
+          variable: llm_text
+      height: 52
+      id: '17866912012510'
+      position:
+        x: 3000
+        y: 440
+      positionAbsolute:
+        x: 3000
+        y: 440
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -382,14 +480,18 @@ workflow:
         title: 低置信度应答
         type: answer
         variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 102
       id: answer_fallback
       position:
-        x: 2425.208120694677
-        y: 716.1744462434616
+        x: 3300
+        y: 720
       positionAbsolute:
-        x: 2425.208120694677
-        y: 716.1744462434616
+        x: 3300
+        y: 720
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -398,13 +500,16 @@ workflow:
       zIndex: 0
     - data:
         context:
-          enabled: false
-          variable_selector: []
+          enabled: true
+          variable_selector:
+          - merge_docs
+          - merged
         desc: 基于检索结果回答用户
         model:
           completion_params:
             max_tokens: 1024
-            temperature: 0.3
+            temperature: 0
+            thinking: false
           mode: chat
           name: deepseek-v4-flash
           provider: langgenius/deepseek/deepseek
@@ -418,37 +523,14 @@ workflow:
         - edition_type: basic
           id: badb7181-5e48-4f81-bb23-6fbe3f2ac65d
           role: system
-          text: '你是「肠道健康」品牌的智能客服助手，只能回答：
-
-            1) 肠菌检测流程与报告解读（非诊断）；
-
-            2) 肠道健康科普知识；
-
-            3) 公司产品和调养服务说明；
-
-            4) 订单、物流、退款政策。
-
-
-            严格遵循以下规则：
-
-            - 不做出任何疾病诊断，不推荐使用药品或具体剂量。
-
-            - 遇到便血、剧烈腹痛、持续腹泻、体重骤降、高烧等高风险描述时，必须立刻输出转人工话术，不再继续回答问题。
-
-            - 报告中的检测指标仅做"科普性解释"，结尾必须建议用户咨询医生或营养师。
-
-            - 产品功效只引用已审核知识库内的标准话术，不得自行发挥。
-
-            - 若用户问题超出知识库范围或你不确定，请礼貌告知无法回答并引导转人工。
-
-            - 所有医疗相关内容末尾追加：以上信息仅供参考，不能替代专业医疗建议。如有不适，请及时就医。
-
-            '
-        - edition_type: jinja2
-          id: fe8f30d1-9750-4390-aa98-499ca93aeac3
-          jinja2_text: '{{ merged }}'
-          role: user
-          text: ''
+          text: "你是「富玛特」的小助手，只能回答：\n1) 肠菌检测流程与报告解读（非诊断）；\n2) 肠道健康科普知识；\n3) 公司产品和调养服务说明；\n\
+            4) 订单、物流、退款政策。\n\n「交互与问候规则」：\n1. 当用户仅发送日常礼貌问候（如“你好”、“hi”、“hello”、“在吗”、“早上好”等）时，请热情礼貌地问候用户，介绍自己是富玛特小助手，并主动询问有什么关于肠道菌群、检测报告或微生态调节的问题可以协助。\n\
+            2. 当用户表达感谢或告别时，礼貌回应并致以健康祝愿。\n\n「严格遵循以下规则」\n1. 排版格式：禁止使用 Markdown 粗体（不得使用\
+            \ **文本**）。需要强调的内容统一使用「文本」表示。\n2. 医疗边界：不做出任何疾病诊断，不推荐药品或具体剂量。\n3. 高危拦截：遇到便血、剧烈腹痛、持续腹泻、体重骤降、高烧等描述，立刻输出转人工话术并终止回答。\n\
+            4. 产品话术：只引用已审核知识库内的标准话术，不得自行发挥。\n5. 兜底逻辑：超出知识库或不确定时，礼貌告知无法回答并引导转人工。\n\
+            6. 统一免责声明（重要）：\n   - 纯流程、物流、售后类问题：无需添加免责声明。\n   - 涉及健康科普、报告指标解读或产品调养说明时：在回答的最末尾只允许追加一次统一声明，格式为：\n\
+            \     「以上信息仅供参考，不能替代专业医疗建议。如需进一步评估，建议咨询医生或专业营养师。」\n   - 严禁在同一回复中输出多段含义重复的温馨提示或免责声明。\n\
+            7. 快捷导航指引：在回复末尾可适度附带指引：如需重新查看快捷问题导航，可随时回复「菜单」。"
         - edition_type: basic
           id: 0510db34-58ca-48fe-8816-8ef0f8439253
           jinja2_text: '{{ merged }}'
@@ -458,7 +540,7 @@ workflow:
 
             检索到的参考内容（按相关度排序）：
 
-            {{#merge_docs.merged#}}
+            {{#context#}}
 
             请基于参考内容生成回答，不要添加未在知识库中出现的信息。
 
@@ -468,19 +550,32 @@ workflow:
 
             '
         selected: false
+        structured_output_enabled: false
         title: 客服回答
         type: llm
         version: '1'
         vision:
           enabled: false
+        memory:
+          query_prompt_template: '{{#sys.query#}}'
+          role_prefix:
+            assistant: ''
+            user: ''
+          window:
+            enabled: true
+            size: 10
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 116
       id: answer_llm
       position:
-        x: 1779.0557440698992
-        y: 427.0966325548784
+        x: 2700
+        y: 440
       positionAbsolute:
-        x: 1779.0557440698992
-        y: 427.0966325548784
+        x: 2700
+        y: 440
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -488,20 +583,24 @@ workflow:
       width: 242
       zIndex: 0
     - data:
-        answer: '{{#answer_llm.text#}}'
+        answer: '{{#17866912012510.answer#}}'
         desc: ''
         selected: false
         title: 正常应答
         type: answer
         variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 102
       id: answer_main
       position:
-        x: 2082.0297111698396
-        y: 427.0966325548784
+        x: 3300
+        y: 440
       positionAbsolute:
-        x: 2082.0297111698396
-        y: 427.0966325548784
+        x: 3300
+        y: 440
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -515,6 +614,10 @@ workflow:
         title: 高风险应答
         type: answer
         variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 102
       id: answer_risk
       position:
@@ -535,8 +638,9 @@ workflow:
         body:
           data:
           - type: text
-            value: '{"user_query": "{{#sys.query#}}", "match_score": 0.0, "risk_flag":
-              false, "context": {"channel": "dify_cs_agent", "score": "low"}}'
+            value: "{\n    \"user_query\": \"{{#sys.query#}}\", \n    \"match_score\"\
+              : {{#merge_docs.top_score#}}, \n    \"risk_flag\": false, \n    \"context\"\
+              : {\"channel\": \"dify_cs_agent\", \"score\": \"low\"}}"
           type: json
         desc: 通知后端捕获未解答问题
         headers: 'Content-Type:application/json
@@ -557,14 +661,18 @@ workflow:
         title: 低置信度回调
         type: http-request
         url: '{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture'
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 169
       id: fallback_callback
       position:
-        x: 2082.0297111698396
-        y: 716.1744462434616
+        x: 3000
+        y: 720
       positionAbsolute:
-        x: 2082.0297111698396
-        y: 716.1744462434616
+        x: 3000
+        y: 720
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -580,14 +688,18 @@ workflow:
         title: 低置信度转人工话术
         type: template-transform
         variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 52
       id: fallback_handoff
       position:
-        x: 1769.866157229923
-        y: 716.1744462434616
+        x: 2700
+        y: 720
       positionAbsolute:
-        x: 1769.866157229923
-        y: 716.1744462434616
+        x: 2700
+        y: 720
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -611,20 +723,24 @@ workflow:
           weights: null
         query_attachment_selector: []
         query_variable_selector:
-        - sys
-        - query
+        - extract_query
+        - search_query
         retrieval_mode: multiple
         selected: false
         single_retrieval_config: null
         title: 检索 DOC 知识库
         type: knowledge-retrieval
-      height: 118
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 80
       id: knowledge_retrieval_doc
       position:
-        x: 900
+        x: 1780
         y: 620
       positionAbsolute:
-        x: 900
+        x: 1780
         y: 620
       selected: false
       sourcePosition: null
@@ -649,21 +765,25 @@ workflow:
           weights: null
         query_attachment_selector: []
         query_variable_selector:
-        - sys
-        - query
+        - extract_query
+        - search_query
         retrieval_mode: multiple
         selected: false
         single_retrieval_config: null
         title: 检索 QA 知识库
         type: knowledge-retrieval
-      height: 118
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 80
       id: knowledge_retrieval_qa
       position:
-        x: 904.594793419988
-        y: 415.6096490049081
+        x: 1780
+        y: 400
       positionAbsolute:
-        x: 904.594793419988
-        y: 415.6096490049081
+        x: 1780
+        y: 400
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -703,13 +823,13 @@ workflow:
           top_score:
             children: null
             type: number
-        selected: true
+        selected: false
         title: 合并排序
         type: code
         variables:
         - value_selector:
-          - sys
-          - query
+          - extract_query
+          - search_query
           variable: query
         - value_selector:
           - knowledge_retrieval_qa
@@ -719,15 +839,19 @@ workflow:
           - knowledge_retrieval_doc
           - result
           variable: doc_docs
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 96
       id: merge_docs
       position:
-        x: 1186.8921901299823
-        y: 448.9219012998221
+        x: 2080
+        y: 440
       positionAbsolute:
-        x: 1186.8921901299823
-        y: 448.9219012998221
-      selected: true
+        x: 2080
+        y: 440
+      selected: false
       sourcePosition: null
       targetPosition: null
       type: custom
@@ -759,6 +883,10 @@ workflow:
         selected: false
         title: 是否高风险
         type: if-else
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 248
       id: risk_branch
       position:
@@ -801,6 +929,10 @@ workflow:
         title: 高风险回调
         type: http-request
         url: '{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture'
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 169
       id: risk_callback
       position:
@@ -824,6 +956,7 @@ workflow:
           completion_params:
             max_tokens: 256
             temperature: 0
+            thinking: false
           mode: chat
           name: deepseek-v4-flash
           provider: langgenius/deepseek/deepseek
@@ -851,13 +984,17 @@ workflow:
         version: '1'
         vision:
           enabled: false
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 132
       id: risk_guard
       position:
-        x: -68.26004398899798
+        x: -59.070457149021735
         y: 397.23047532495553
       positionAbsolute:
-        x: -68.26004398899798
+        x: -59.070457149021735
         y: 397.23047532495553
       selected: false
       sourcePosition: null
@@ -876,6 +1013,10 @@ workflow:
         title: 高风险转人工话术
         type: template-transform
         variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 52
       id: risk_handoff
       position:
@@ -917,14 +1058,18 @@ workflow:
         selected: false
         title: 是否有可用结果
         type: if-else
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 216
       id: score_branch
       position:
-        x: 1468.0408884849792
-        y: 427.0966325548784
+        x: 2380
+        y: 440
       positionAbsolute:
-        x: 1468.0408884849792
-        y: 427.0966325548784
+        x: 2380
+        y: 440
       selected: false
       sourcePosition: null
       targetPosition: null
@@ -937,6 +1082,10 @@ workflow:
         title: 开始
         type: start
         variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
       height: 73
       id: start
       position:
@@ -951,8 +1100,176 @@ workflow:
       type: custom
       width: 242
       zIndex: 0
+    - data:
+        title: 术语归一化
+        desc: 专有名词大小写归一化与医学缩写扩展（如 fmt -> FMT 肠道菌群移植）
+        type: code
+        code_language: python3
+        code: "def main(query: str = \"\") -> dict:\n    import re\n    q = query.strip()\
+          \ if query else \"\"\n    synonym_map = {\n        \"fmt\": \"FMT 肠道菌群移植\"\
+          ,\n        \"asd\": \"ASD 孤独症自闭症\",\n        \"ibd\": \"IBD 炎症性肠病\",\n \
+          \       \"sibo\": \"SIBO 小肠细菌过度生长\",\n        \"ibs\": \"IBS 肠易激综合征\",\n\
+          \        \"bmi\": \"BMI 体重指数\",\n        \"gut\": \"肠道菌群\",\n        \"\
+          粪菌移植\": \"FMT 肠道菌群移植\",\n        \"菌群移植\": \"FMT 肠道菌群移植\",\n        \"肠菌检测\"\
+          : \"肠道菌群检测\",\n    }\n    sorted_keys = sorted(synonym_map.keys(), key=len,\
+          \ reverse=True)\n    patterns = []\n    for k in sorted_keys:\n        if\
+          \ k.isascii():\n            patterns.append(rf\"(?<![a-zA-Z]){re.escape(k)}(?![a-zA-Z])\"\
+          )\n        else:\n            patterns.append(re.escape(k))\n    combined_pattern\
+          \ = re.compile(\"|\".join(patterns), flags=re.IGNORECASE)\n    \n    def\
+          \ _repl(match):\n        matched_text = match.group(0).lower()\n       \
+          \ return synonym_map.get(matched_text, match.group(0))\n    \n    norm_q\
+          \ = combined_pattern.sub(_repl, q)\n    return {\"normalized_query\": norm_q,\
+          \ \"original_query\": q}"
+        outputs:
+          normalized_query:
+            type: string
+            children: null
+          original_query:
+            type: string
+            children: null
+        selected: false
+        variables:
+        - value_selector:
+          - sys
+          - query
+          value_type: string
+          variable: query
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 72
+      id: normalize_query
+      position:
+        x: 880
+        y: 400
+      positionAbsolute:
+        x: 880
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        title: 多轮指代改写
+        desc: 结合多轮对话上下文进行指代消解与独立检索 Query 生成
+        type: llm
+        version: '1'
+        context:
+          enabled: false
+          variable_selector: []
+        vision:
+          enabled: false
+        structured_output_enabled: false
+        memory:
+          query_prompt_template: '{{#sys.query#}}'
+          role_prefix:
+            assistant: ''
+            user: ''
+          window:
+            enabled: true
+            size: 10
+        model:
+          provider: langgenius/deepseek/deepseek
+          name: deepseek-v4-flash
+          mode: chat
+          completion_params:
+            max_tokens: 256
+            temperature: 0.0
+            thinking: false
+        prompt_template:
+        - edition_type: basic
+          id: c6797b36-4e07-4c68-af47-2d1b2d35df55
+          role: system
+          text: '# Role
+
+            你是一个专业的客服检索查询改写助手。你的任务是根据用户的最新输入以及多轮对话历史，生成一个独立的、信息完整的检索语句，供知识库进行高精度语义与关键词匹配。
+
+
+            # Rules
+
+            1. 如果用户最新输入本身包含完整的主语和意图（如“FMT 适合什么年龄段”、“肠菌检测流程是什么”），请保持核心语义并输出标准查询语句。
+
+            2. 如果用户最新输入存在代词指代或上下文省略（如上文在聊“粪菌移植/FMT”，后续追问“适合什么年龄”、“小孩能做吗”、“价格是多少”、“有什么禁忌”），必须结合对话历史将省略的主语和背景补全（例如改写为“肠道菌群移植(FMT)适合什么年龄段的人群与适应症”）。
+
+            3. 统一规范医学术语（如 fmt 归一为 FMT 肠道菌群移植）。
+
+            4. 输出必须且只能是一句精炼的查询文本，严禁包含任何问候、解释、外层引号或无关废话。'
+        - edition_type: basic
+          id: 2af81437-1bb7-404c-8ab0-064d2495bfa2
+          role: user
+          text: '用户当前输入：{{#normalize_query.normalized_query#}}
+
+
+            请输出用于知识库检索的完整独立查询语句：'
+        selected: false
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 116
+      id: query_rewriter
+      position:
+        x: 1180
+        y: 400
+      positionAbsolute:
+        x: 1180
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        title: 检索词提取
+        desc: 剥除思考标签并提取最终检索 Query
+        type: code
+        code_language: python3
+        code: "def main(llm_text: str = \"\", fallback_query: str = \"\") -> dict:\n\
+          \    import re\n    text = re.sub(r\"<think>.*?</think>\", \"\", llm_text\
+          \ or \"\", flags=re.S).strip()\n    clean_query = text if text else (fallback_query\
+          \ or \"\")\n    clean_query = clean_query.strip('\"\\'“”‘’').strip()\n \
+          \   return {\"search_query\": clean_query if clean_query else (fallback_query\
+          \ or \"\")}"
+        outputs:
+          search_query:
+            type: string
+            children: null
+        selected: false
+        variables:
+        - value_selector:
+          - query_rewriter
+          - text
+          value_type: string
+          variable: llm_text
+        - value_selector:
+          - normalize_query
+          - normalized_query
+          value_type: string
+          variable: fallback_query
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 72
+      id: extract_query
+      position:
+        x: 1480
+        y: 400
+      positionAbsolute:
+        x: 1480
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
     viewport:
-      x: -1215.6029137399162
-      y: -195.36414632363744
-      zoom: 0.870550563296124
+      x: -737.8735050526735
+      y: 180.9055923272948
+      zoom: 0.5743491774985172
   rag_pipeline_variables: []

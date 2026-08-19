@@ -1,0 +1,48 @@
+# ==============================================================================
+# Docker 打包忽略清单 (.dockerignore)
+# 排除本地虚拟环境、缓存、测试代码及密钥文件，确保镜像精简与安全
+# ==============================================================================
+
+# Python 编译和缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境与依赖缓存
+.venv/
+venv/
+ENV/
+env/
+
+# 测试与覆盖率文件
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# 编辑器与工程临时目录
+.vscode/
+.idea/
+.agent/
+.reasonix/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# 密钥与本地环境变量文件（严禁打入镜像）
+.env
+.env.*
+!.env.example
+
+# 打包归档产物与日志
+*.tar
+*.zip
+*.gz
+*.log
+
+# 本地开发辅助脚本
+dev.bat
+dev.ps1

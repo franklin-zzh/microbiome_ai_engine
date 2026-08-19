@@ -87,6 +87,8 @@ def create_document_version(
         "category": category,
         "tags": tags,
         "asset_filename": asset.original_filename,
+        "source_domain": getattr(asset, "source_domain", None),
+        "source_url": getattr(asset, "source_url", None),
         "doc_form": document.doc_form.value,
     }
     version = KnowledgeDocumentVersion(
@@ -283,15 +285,18 @@ def publish_document_version(version_id: int, db: Optional[Session] = None) -> N
 
         source = asset_file_path(version.asset)
         doc_form = version.document.doc_form
+        title = version.document.title or version.asset.original_filename
+        doc_filename = f"{title}.md" if not title.endswith((".md", ".txt", ".pdf", ".docx", ".doc")) else title
+
         if doc_form == KnowledgeDocForm.QA_MODEL:
-            uploaded = upload_pipeline_file(source, version.asset.original_filename)
+            uploaded = upload_pipeline_file(source, doc_filename)
             target.dify_file_id = uploaded["id"]
             db.commit()
 
             output = run_pipeline(
                 target.dataset_id,
                 target.dify_file_id,
-                version.asset.original_filename,
+                doc_filename,
                 target.pipeline_start_node_id,
             )
             run_id, document_id = extract_pipeline_identifiers(output)
@@ -307,7 +312,7 @@ def publish_document_version(version_id: int, db: Optional[Session] = None) -> N
             document_id = create_by_file(
                 target.dataset_id,
                 source,
-                version.asset.original_filename,
+                doc_filename,
                 doc_form=doc_form.value,
             )
             target.dify_document_id = document_id

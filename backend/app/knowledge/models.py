@@ -92,12 +92,16 @@ class KnowledgeAsset(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     original_filename = Column(String(255), nullable=False)
+    source_type = Column(String(32), nullable=False, default="UPLOAD", server_default="UPLOAD", index=True)  # UPLOAD / CRAWLER / ETL
+    source_domain = Column(String(128), index=True)  # 例如 "fmtbio.com"
+    source_url = Column(String(1024))                # 例如 "https://fmtbio.com/hangye/index_10.html"
     mime_type = Column(String(128))
     size_bytes = Column(Integer, nullable=False)
     sha256 = Column(String(64), nullable=False, index=True)
     storage_provider = Column(String(32), nullable=False, default="LOCAL")
     bucket = Column(String(128))
     object_key = Column(String(512), nullable=False, unique=True)
+    extra_meta = Column(JSON, default=dict)          # 存储 depth, relative_path, seed_url, crawled_at 等
     created_by = Column(String(128))
     created_at = Column(DateTime, server_default=func.now())
 

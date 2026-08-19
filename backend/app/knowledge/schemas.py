@@ -53,11 +53,15 @@ class GenericMessageResponse(BaseModel):
 class KnowledgeAssetOut(BaseModel):
     id: int
     original_filename: str
+    source_type: str = "UPLOAD"
+    source_domain: Optional[str] = None
+    source_url: Optional[str] = None
     mime_type: Optional[str] = None
     size_bytes: int
     sha256: str
     storage_provider: str
     object_key: str
+    extra_meta: Optional[Dict[str, Any]] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -159,6 +163,23 @@ class KnowledgeDocumentOut(BaseModel):
     versions: List[KnowledgeDocumentVersionOut] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class BatchReviewRequest(BaseModel):
+    version_ids: List[int] = Field(..., min_length=1)
+    operator: str = Field(default="admin", min_length=1)
+    review_note: Optional[str] = None
+
+
+class AssetContentOut(BaseModel):
+    asset_id: int
+    filename: str
+    content: str
+    source_url: Optional[str] = None
+    source_domain: Optional[str] = None
+    source_type: Optional[str] = None
+    size_bytes: int
+
 
 
 class KnowledgeDocumentListResponse(BaseModel):

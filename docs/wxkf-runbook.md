@@ -97,6 +97,9 @@ Dify（192.168.110.16:3080）── POST /v1/chat-messages（blocking）拿回�
   - **`kf_msg_or_event`**（企微只通知「有新消息/事件」，不携带消息体，`from_user`/`content` 均为空）：用回调里的 `Token` + `OpenKfId` 调 `sync_msg` 主动拉取消息，再逐条走状态机 + 回复（`_sync_and_reply_async`）；
   - 非文本消息 → 回 `NON_TEXT_REPLY` 提示，不进入状态机（事件 `wechat_kf_msg_ignored`）；
   - 会话标识：`session_id = "wxkf:{from_user}"`。
+  - **即时 ack**：需经由 Dify 深度思考的长链路问题先推「收到，正在为您查询，请稍候～」（`.env WXKF_ACK_REPLY` 可覆盖），再异步等 Dify 正式回答——用户感知等待从 ~12s 降到 ~1.5s；纯日常问候与菜单指令自动跳过 ack 直发回答。
+  - **日常问候与菜单 Fast-Path 极速秒回**：用户发送纯问候（“你好/您好/在吗/hi/早上好”）或菜单指令（“菜单/常见问题/help”）时，后端识别后直接调用 `send_kf_menu` 发送富玛特小助手欢迎语 + 3 个快捷问题按钮，**耗时 <50ms，零 LLM 成本，不调用 Dify**。
+  - **enter_session 欢迎语 + 快捷菜单**：用户进入会话时用事件回调携带的 `WelcomeCode` 调 `send_msg_on_event` 推**单条 msgmenu**（欢迎语文本 + 三个快捷提问按钮合并：检测流程/报告解读/调理服务）；**无 `WelcomeCode`（48h 内已欢迎过或用户已发过消息）直接跳过**，不再降级 `send_msg`（企微规则：用户未发消息时 `send_msg` 主动下发必 95001）；点击菜单项后企微自动以文本消息回复对应问题（带 `text.menu_id`），走正常 sync_msg 问答链路；不进入状态机；避免使用企微后台欢迎语（其「知识库问答」选项会开启企微机器人接管消息）。
 
 ### 3.3 会话状态机（Redis db3）
 
@@ -126,6 +129,13 @@ RISK_KEYWORDS = (
     "持续腹泻", "水样便", "频繁呕吐", "脓血便", "体重骤降", "不明原因消瘦",
     "肠梗阻", "肠穿孔", "肠癌", "直肠癌", "结肠癌", "高烧不退", "严重脱水",
 )
+GREETING_KEYWORDS = (
+    "你好", "您好", "hi", "hello", "在吗", "在嘛", "在不", "早", "早上好",
+    "中午好", "下午好", "晚上好", "嗨", "哈喽", "hey",
+)
+MENU_KEYWORDS = (
+    "菜单", "快捷菜单", "常见问题", "menu", "help", "帮助", "功能", "指引", "导航",
+)
 ```
 
 ### 3.4 预设话术（router.py，0 LLM 成本）
@@ -134,8 +144,11 @@ RISK_KEYWORDS = (
 |---|---|---|
 | 风险拦截 BLOCKED | `您描述的情况可能涉及健康风险，我这边无法在线判断。建议您尽快联系专业医生或拨打客服热线。我马上为您转接专属健康顾问。` | `.env RISK_BLOCKED_REPLY` 可覆盖；与工作流 risk_handoff 话术一致 |
 | 转人工 HUMAN_MODE | `正在为您转接人工客服，请稍候。` | `HUMAN_HANDOFF_REPLY` |
+| 日常问候 / 菜单 Fast-Path | 欢迎语 + 3 个快捷问题交互菜单（检测流程/报告解读/调理服务） | `_DEFAULT_WXKF_WELCOME_REPLY` + `WXKF_MENU_ITEMS`，落库 `meta.route="greeting_fast_path"` 或 `"menu"` |
 | Dify 调用失败兜底 | `抱歉，系统暂时繁忙，请稍后再试。` | `DIFY_FAILBACK_REPLY`，落库 `meta.route="dify_error"` |
 | 非文本消息 | `您好，我暂时只能处理文字消息，请用文字描述您的问题～` | `NON_TEXT_REPLY` |
+| 即时 ack | `收到，正在为您查询，请稍候～` | `.env WXKF_ACK_REPLY` 可覆盖 |
+| 欢迎语（进入会话） | `您好，我是「肠道健康」品牌的智能客服助手，可以为您解答肠菌检测流程、报告解读（非诊断）、肠道健康科普以及产品与调养服务相关问题。请问有什么可以帮您？` | `.env WXKF_WELCOME_REPLY` 可覆盖；走 `send_msg_on_event`（`WelcomeCode`）推单条 msgmenu（欢迎语+三个按钮）；无 code 跳过 |
 
 ### 3.5 `.env` 配置项
 
@@ -153,6 +166,10 @@ DIFY_CHAT_API_KEY=                     # 客服应用专用对话 Key（推荐�
 
 # ---- 风控 ----
 RISK_BLOCKED_REPLY=                    # 命中高风险关键词的预设话术（留空用内置默认）
+
+# ---- 微信客服话术 ----
+WXKF_ACK_REPLY=                        # 收到消息的即时 ack（留空用内置默认）
+WXKF_WELCOME_REPLY=                    # 进入会话的欢迎语（留空用内置默认）
 ```
 
 > ⚠️ `WXKF_TOKEN` 与 `WXKF_ENCODING_AES_KEY` 必须与企微后台回调配置页**逐字符完全一致**（包括大小写与位数），否则 GET 校验 / POST 验签必失败。
@@ -284,11 +301,15 @@ curl "https://wx.fmtcloud.cn/wx/msg?msg_signature=x&timestamp=1&nonce=x&echostr=
 | `wechat_kf_verify_error` / `wechat_kf_verify_failed` | GET 校验失败 / 未配置密钥 |
 | `wechat_kf_msg_received` | POST 消息接收（记录 from_user=ExternalUserID / msg_type / wechat_event / content_len / msg_id，**不存原文**） |
 | `wechat_kf_sync_notified` | 收到 `kf_msg_or_event` 通知（只带 open_kfid/token，即将触发 sync_msg 拉取） |
+| `wechat_kf_welcome` | enter_session 事件：解析 WelcomeCode 并调度欢迎语推送（含 open_kfid/from_user/has_code） |
+| `wxkf_welcome_skipped` | 无 WelcomeCode（48h 内已欢迎过或用户已发过消息）：跳过，不推送 |
+| `wxkf_welcome_on_event_sent` / `wxkf_welcome_on_event_failed` | send_msg_on_event 欢迎语推送成功（含 msgid） / 失败（errcode/errmsg） |
 | `wxkf_sync_failed` / `wxkf_sync_skipped` | sync_msg 拉取失败 / 无 open_kfid 跳过 |
 | `wechat_kf_sync_task_error` | sync 拉取后台任务异常 |
 | `wechat_kf_msg_ignored` | 非文本消息（回 NON_TEXT_REPLY） |
 | `wechat_kf_route` | 状态机分流结果（state / hit_keyword / should_answer） |
 | `wxkf_send_msg` | 主动推送成功（含 msgid） |
+| `wxkf_send_menu` | msgmenu 菜单消息推送成功（含 items 与 msgid） |
 | `wxkf_push_skipped` | 无 open_kf_id 跳过推送 |
 | `wxkf_push_failed` | 推送失败（errcode/errmsg） |
 | `dify_chat_failed` | Dify 调用失败（走兜底话术） |
@@ -353,6 +374,24 @@ ORDER BY id DESC LIMIT 10;
 | Dify 不可用 | 临时停 Dify 后发消息 | 回「系统暂时繁忙」；日志 `dify_chat_failed`；落库 `meta.route="dify_error"` |
 | 高频问题 | 连发 5-10 条正常问题 | 每轮回调均 5 秒内回 success，无 5 秒超时报警 |
 
+### 6.4 端到端延迟构成（实测，2026-08-17）
+
+| 段 | 耗时 | 说明 |
+|---|---|---|
+| 微信 → 回调 + sync_msg 拉取 | ~0.5s | `kf_msg_or_event` 通知后拉取 |
+| Dify blocking 响应 | **7-13s（大头）** | LLM 推理 + 工作流节点串行；换快模型/精简节点可降到 1-3s |
+| `kf/send_msg` 推送 | ~0.6s | 企微 API 响应 |
+| 微信客户端下发 | ~1-2s | 微信侧不可控 |
+
+优化：后端已加即时 ack（§3.2，感知等待已缩短）；**治本在 Dify 侧**——控制台把 LLM 节点换非 reasoning 模型（如 deepseek-chat/gpt-4o-mini/qwen-turbo）、减少串行 LLM 节点数、确认 Dify 服务器 CPU/内存充足。
+
+### 6.5 快捷提问菜单（msgmenu）验证
+
+1. 新用户（48h 内未进过会话）进入会话：应收到**单条**带三个按钮的菜单消息（欢迎语文本合并其中；检测流程/报告解读/调理服务），日志 `wxkf_welcome_on_event_sent`；
+2. 同一用户结束会话后再次进入（48h 内）：日志出现 `wxkf_welcome_skipped`，微信端**不再**收到欢迎语（企微规则：同一用户 48h 只欢迎一次），且不再出现 95001 `wxkf_push_failed`；
+3. 点击任一按钮 → 微信端自动发出该问题文本 → 后端正常回答（日志 `wechat_kf_route` 出现 `menu_id=q_flow` 等标记）；
+4. 菜单项数限制：click/view/miniprogram 合计 ≤10 个；msgmenu `head_content`/`tail_content` ≤1024 字节；**文本消息不支持 Markdown**（`**加粗**` 会原样显示，需用「」/换行排版）。
+
 ---
 
 ## 7. 故障排查表
@@ -362,7 +401,7 @@ ORDER BY id DESC LIMIT 10;
 | 1 | 企微后台保存回调 URL 失败 | Token / EncodingAESKey 与 `.env` 不一致；backend 未启动；frp 隧道断 | 核对 §4.6；确认本地 8000 起；`curl https://wx.fmtcloud.cn/health`；看日志 `wechat_kf_verify_error` |
 | 2 | `wechat_kf_verify_failed`（500） | `.env` 缺 `WXKF_TOKEN` / `WXKF_ENCODING_AES_KEY` | 补全后重启 backend |
 | 3 | POST 消息一直 400 `wechat_kf_msg_verify_failed` | Token / EncodingAESKey / CorpID 与后台不一致（多为 EncodingAESKey 位数或大小写） | 逐字符核对 §4.6；重启 backend 使新配置生效 |
-| 4 | 微信收不到回复 | ① `wxkf_push_skipped`：回调里 `OpenKfId` 为空 → 客服账号问题；② `wxkf_push_failed`：access_token 失效或 Secret 错；③ Dify 慢/挂 | 看对应事件日志；`gettoken` 手动调一次核对 Secret；确认 Dify 控制台会话在跑 |
+| 4 | 微信收不到回复 | ① `wxkf_push_skipped`：回调里 `OpenKfId` 为空 → 客服账号问题；② `wxkf_push_failed`：access_token 失效或 Secret 错、或 `40058 missing field open_kfid`（send_msg body 漏 open_kfid，曾为 bug 已修，勿回退）；③ Dify 慢/挂 | 看对应事件日志；`gettoken` 手动调一次核对 Secret；确认 Dify 控制台会话在跑 |
 | 5 | 回复内容带 `<think>...</think>` | Dify 工作流 answer_llm 未剥离思考内容（E7 复发） | Dify 控制台检查剥离节点，`smoke_chat.py` 复测 |
 | 6 | 回包超 5 秒 | Dify 阻塞（正常分支基线 10.1s，属正常范围——后台异步不受影响）；Redis/MySQL 慢 | 看 `cs_chat_log_written` 时间与推送时间差；正常分支慢见 CS-ISSUE-LOG S3 观察项 |
 | 7 | `curl https://wx.fmtcloud.cn` 超时 / 502 | frpc 未启动；frps token 不一致被拒；nginx 未 reload；本地 backend 未起 | 本地起 frpc 看日志；服务器 `docker logs frps`；`curl http://127.0.0.1:6001`（服务器侧）；`systemctl reload nginx` |

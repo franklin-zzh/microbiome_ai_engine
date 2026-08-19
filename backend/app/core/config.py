@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     dify_chat_timeout_seconds: int = 120     # chat-messages 阻塞响应超时（RAG 链路可能较慢）
     # 命中高风险医疗关键词时直接返回的预设话术（0 LLM 调用）；留空用内置默认话术
     risk_blocked_reply: str = ""
+    # 微信客服收到消息后的即时 ack 话术（Dify 思考期间先回一句，缩短用户感知等待）；留空用内置默认
+    wxkf_ack_reply: str = ""
+    # 微信客服欢迎语（enter_session 事件时主动推送）；留空用内置默认
+    wxkf_welcome_reply: str = ""
     # 域 -> 知识库映射（留空 = 未启用，启用前 dataset_id_for_domain 会拒绝该域/形态）
     cs_qa_dataset_id: str = ""       # CS 问答库（qa_model；同时作为原始文档 Pipeline 的发布目标）
     cs_doc_dataset_id: str = ""      # CS 长文档库（text_model/hierarchical_model，双库预留）
@@ -77,6 +81,15 @@ class Settings(BaseSettings):
     wxkf_secret: str = ""
     wxkf_token: str = ""
     wxkf_encoding_aes_key: str = ""
+
+    # 企业微信招商群 / 招商自建应用 / Webhook 配置
+    wecom_sales_webhook_url: str = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9c0f4b81-a47e-468e-ada7-0ab5e6ffc7db"
+    wecom_sales_corp_id: str = ""
+    wecom_sales_agent_id: str = ""
+    wecom_sales_secret: str = ""
+    wecom_sales_token: str = ""
+    wecom_sales_encoding_aes_key: str = ""
+    dify_sales_chat_api_key: str = ""
 
     # ============ 安全基线（P0，全部必填）============
     # JWT 签发密钥：生成方式 python -c "import secrets; print(secrets.token_urlsafe(48))"

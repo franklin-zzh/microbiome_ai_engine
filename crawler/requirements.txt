@@ -1,0 +1,15 @@
+# ============ Web Crawler 依赖 ============
+# 静态网站爬取
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0            # BS4 速度更快的解析器
+
+# 正文智能提取（自动过滤 nav/footer/ads，中文友好）
+trafilatura>=1.8.0
+
+# 动态网站（JS 渲染）fallback
+# 安装后需额外执行：playwright install chromium
+playwright>=1.40.0
+
+# 工具
+urllib3>=2.0.0

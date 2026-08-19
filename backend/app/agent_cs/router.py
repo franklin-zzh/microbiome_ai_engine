@@ -53,6 +53,31 @@ _DEFAULT_RISK_BLOCKED_REPLY = (
 HUMAN_HANDOFF_REPLY = "正在为您转接人工客服，请稍候。"
 DIFY_FAILBACK_REPLY = "抱歉，系统暂时繁忙，请稍后再试。"
 NON_TEXT_REPLY = "您好，我暂时只能处理文字消息，请用文字描述您的问题～"
+# Dify 思考期间的即时 ack 话术（缩短用户感知等待）；可用 .env WXKF_ACK_REPLY 覆盖
+_DEFAULT_WXKF_ACK_REPLY = "收到，正在为您查询，请稍候～"
+# 用户进入会话（enter_session）时的欢迎语；可用 .env WXKF_WELCOME_REPLY 覆盖
+_DEFAULT_WXKF_WELCOME_REPLY = "您好！我是您的「富玛特小助手」"
+WXKF_MENU_HEAD = "您可以直接输入您想了解的问题，也可以点击下方热门问题快速咨询："
+
+# 欢迎语附带的快捷提问菜单（msgmenu）：用户点击后自动发送对应文本问题，走正常问答链路
+WXKF_MENU_ITEMS = [
+    {"id": "q_fmt", "content": "什么是粪菌移植（FMT）？适合哪些人群？"},
+    {"id": "q_flow", "content": "肠菌检测怎么做？采样流程是什么？"},
+    {"id": "q_report", "content": "检测报告怎么看？多久出结果？"},
+    {"id": "q_service", "content": "肠道营养调理与益生菌方案有哪些？"},
+    {"id": "q_human", "content": "怎么联系人工客服或健康顾问？"},
+]
+
+# 统一的富文本欢迎菜单文本（含微信专属可点击超链接标签）
+_DEFAULT_WXKF_WELCOME_MENU_TEXT = (
+    "您好！我是您的「富玛特小助手」\n"
+    "您可以直接输入您想了解的问题，也可以点击下方热门问题快速咨询：\n\n"
+    '<a href="weixin://kefumenu?kefumenucontent=什么是粪菌移植（FMT）？适合哪些人群？&kefumenuid=q_fmt">【核心技术】什么是粪菌移植（FMT）？</a>\n\n'
+    '<a href="weixin://kefumenu?kefumenucontent=肠菌检测怎么做？采样流程是什么？&kefumenuid=q_flow">【采样流程】肠菌检测怎么做？流程是什么？</a>\n\n'
+    '<a href="weixin://kefumenu?kefumenucontent=检测报告怎么看？多久出结果？&kefumenuid=q_report">【报告解读】检测报告怎么看？多久出结果？</a>\n\n'
+    '<a href="weixin://kefumenu?kefumenucontent=肠道营养调理与益生菌方案有哪些？&kefumenuid=q_service">【调理方案】肠道营养调理与益生菌方案有哪些？</a>\n\n'
+    '<a href="weixin://kefumenu?kefumenucontent=怎么联系人工客服或健康顾问？&kefumenuid=q_human">【人工咨询】如何联系富玛特人工健康顾问？</a>'
+)
 
 # sync_msg 拉取链路的 Redis 键 TTL（与企微消息 3 天窗口对齐）
 SYNC_CURSOR_TTL = 3 * 24 * 3600  # 游标与 msgid 去重集合的存活时间
@@ -382,6 +407,8 @@ async def handle_wechat_message(
         content = msg_root.findtext("Content") or ""
         msg_id = msg_root.findtext("MsgId") or ""
         token = msg_root.findtext("Token") or ""
+        # enter_session 事件携带的欢迎语凭据：仅在「用户过去 48 小时未收过欢迎语且未发过消息」时返回
+        welcome_code = msg_root.findtext("WelcomeCode") or ""
     except Exception as exc:
         structured_log(
             event="wechat_kf_msg_verify_failed",
@@ -414,6 +441,17 @@ async def handle_wechat_message(
             extra={"open_kfid": open_kf_id, "has_token": bool(token)},
         )
         asyncio.create_task(_sync_and_reply_async(open_kf_id, token))
+        return Response(content="success", media_type="text/plain")
+
+    # enter_session：用户进入会话，用事件携带的 welcome_code 推欢迎语 + 快捷提问菜单（msgmenu）；不进入状态机
+    if event == "enter_session":
+        structured_log(
+            event="wechat_kf_welcome",
+            status="SENT",
+            extra={"open_kfid": open_kf_id, "from_user": from_user, "has_code": bool(welcome_code)},
+        )
+        if from_user:
+            asyncio.create_task(_push_welcome(open_kf_id, from_user, welcome_code))
         return Response(content="success", media_type="text/plain")
 
     # 事件类回调（enter_session / kf_msg_sent 等）：仅确认接收，不回复、不进入状态机。
@@ -499,6 +537,54 @@ def _try_push(open_kf_id: str, touser: str, content: str) -> None:
 async def _push_text(open_kf_id: str, touser: str, content: str) -> None:
     """后台协程推送一条文本（同步网络调用放线程池）"""
     await asyncio.to_thread(_try_push, open_kf_id, touser, content)
+
+
+async def _push_welcome(
+    open_kf_id: str,
+    touser: str,
+    welcome_code: Optional[str] = None,
+) -> None:
+    """进入会话欢迎语：仅通过企微事件响应接口（send_msg_on_event + welcome_code）发送单条 msgmenu。
+
+    企微规则（官方文档）：普通 kf/send_msg 只能在用户主动发消息后的 48 小时内回复（最多 5 条），
+    用户未发消息时企业主动下发会被拒（95001 send msg count limit）；欢迎语只能走 send_msg_on_event，
+    且 welcome_code 仅在「用户过去 48 小时未收过欢迎语且未向客服发过消息」时返回——即同一用户
+    48 小时内只欢迎一次。因此：无 welcome_code（48h 内重复进入）直接跳过，不再降级 send_msg。
+    """
+    if not welcome_code:
+        structured_log(
+            event="wxkf_welcome_skipped",
+            status="SKIPPED",
+            extra={
+                "open_kf_id": open_kf_id,
+                "touser": touser,
+                "reason": "no welcome_code (48h 内已欢迎过或用户已发过消息)",
+            },
+        )
+        return
+
+    welcome_text = settings.wxkf_welcome_reply or _DEFAULT_WXKF_WELCOME_REPLY
+    full_head = f"{welcome_text}\n\n{WXKF_MENU_HEAD}"
+    try:
+        msgid = await asyncio.to_thread(
+            wxkf_client.send_kf_welcome_menu_on_event,
+            welcome_code,
+            full_head,
+            WXKF_MENU_ITEMS,
+            "",
+        )
+        structured_log(
+            event="wxkf_welcome_on_event_sent",
+            status="SENT",
+            extra={"open_kf_id": open_kf_id, "touser": touser, "msgid": msgid},
+        )
+    except WxKfError as exc:
+        structured_log(
+            event="wxkf_welcome_on_event_failed",
+            status="FAILED",
+            error_msg=str(exc),
+            extra={"touser": touser, "code": welcome_code},
+        )
 
 
 def _answer_via_dify(db: Session, session_id: str, open_id: str, open_kf_id: str, user_message: str) -> None:
@@ -589,6 +675,18 @@ def _process_and_reply(
                 hit_human=True,
                 meta={"route": "human"},
             )
+        elif sm.is_pure_greeting(user_message) or sm.is_menu_request(user_message):
+            reply_text = _DEFAULT_WXKF_WELCOME_MENU_TEXT
+            _try_push(open_kf_id, open_id, reply_text)
+            _write_chat_log(
+                db,
+                channel="WXKF",
+                session_id=session_id,
+                open_id=open_id,
+                user_message=user_message,
+                ai_reply=reply_text,
+                meta={"route": "greeting_fast_path"},
+            )
         else:
             _answer_via_dify(db, session_id, open_id, open_kf_id, user_message)
     except Exception as exc:
@@ -628,6 +726,44 @@ async def _handle_wechat_reply(
 # ============ kf_msg_or_event：sync_msg 拉取链路（回调只通知不携带消息体） ============
 
 
+def _handle_synced_event(redis: Redis, open_kfid: str, msg: dict) -> Optional[dict]:
+    """处理 sync_msg 拉到的事件类消息（如 enter_session：用户进入会话主动推欢迎语）。
+
+    返回待推欢迎语任务参数 dict（open_kf_id/touser/welcome_code）；不满足条件返回 None。
+    """
+    if msg.get("msgtype") != "event":
+        return None
+    event_dict = msg.get("event") or {}
+    event_type = event_dict.get("event_type") or ""
+    if event_type != "enter_session":
+        return None
+
+    external_userid = msg.get("external_userid") or event_dict.get("external_userid") or ""
+    kfid = msg.get("open_kfid") or event_dict.get("open_kfid") or open_kfid
+    msgid = msg.get("msgid") or ""
+    welcome_code = event_dict.get("welcome_code") or ""
+    if not external_userid or not kfid:
+        return None
+
+    # msgid 幂等去重：防多次拉取重复推欢迎语
+    if msgid:
+        dedup_key = f"wxkf:synced_msgid:{msgid}"
+        if not redis.sadd(dedup_key, 1):
+            return None
+        redis.expire(dedup_key, SYNC_CURSOR_TTL)
+
+    structured_log(
+        event="wechat_kf_welcome_synced",
+        status="RECEIVED",
+        extra={"open_kfid": kfid, "from_user": external_userid, "msg_id": msgid, "has_code": bool(welcome_code)},
+    )
+    return {
+        "open_kf_id": kfid,
+        "touser": external_userid,
+        "welcome_code": welcome_code or None,
+    }
+
+
 def _route_synced_msg(redis: Redis, open_kfid: str, msg: dict) -> Optional[dict]:
     """处理 sync_msg 拉到的单条消息：仅「微信客户发送的文本」，做幂等去重 + 状态机分流。
 
@@ -639,6 +775,7 @@ def _route_synced_msg(redis: Redis, open_kfid: str, msg: dict) -> Optional[dict]
     content = (msg.get("text") or {}).get("content") or ""
     external_userid = msg.get("external_userid") or ""
     msgid = msg.get("msgid") or ""
+    menu_id = (msg.get("text") or {}).get("menu_id") or ""  # 点击欢迎语菜单触发的消息会带
     if not content or not external_userid:
         return None
 
@@ -666,32 +803,38 @@ def _route_synced_msg(redis: Redis, open_kfid: str, msg: dict) -> Optional[dict]
             "hit_keyword": result["hit_keyword"],
             "should_answer": result["should_answer"],
             "source": "sync_msg",
+            "menu_id": menu_id or None,
         },
     )
+    actual_kfid = msg.get("open_kfid") or open_kfid
+    # 即时 ack：仅在需经由 Dify 思考的长链路问题时先推「收到」，问候语/菜单直出则不推冗余 ack
+    if result["should_answer"] and not sm.is_pure_greeting(content) and not sm.is_menu_request(content):
+        _try_push(actual_kfid, external_userid, settings.wxkf_ack_reply or _DEFAULT_WXKF_ACK_REPLY)
     return {
         "session_id": session_id,
         "open_id": external_userid,
-        "open_kf_id": open_kfid,
+        "open_kf_id": actual_kfid,
         "user_message": content,
         "state": result["state"],
         "hit_keyword": result["hit_keyword"],
     }
 
 
-def _sync_and_collect(open_kfid: str, token: str) -> list:
-    """同步：用 Token 调 sync_msg 增量拉取消息并逐条分流，返回待回复任务参数列表"""
+def _sync_and_collect(open_kfid: str, token: str) -> tuple[list[dict], list[dict]]:
+    """同步：用 Token 调 sync_msg 增量拉取消息并逐条分流，返回 (待回复文本列表, 待推欢迎语列表)"""
     redis = get_redis()
-    if not open_kfid:
+    if not open_kfid and not token:
         structured_log(
             event="wxkf_sync_skipped",
             status="SKIPPED",
-            extra={"reason": "no open_kfid"},
+            extra={"reason": "neither open_kfid nor token provided"},
         )
-        return []
+        return [], []
 
-    cursor_key = f"wxkf:sync_cursor:{open_kfid}"
+    cursor_key = f"wxkf:sync_cursor:{open_kfid}" if open_kfid else "wxkf:sync_cursor:default"
     cursor = redis.get(cursor_key) or ""
     to_reply = []
+    to_welcome = []
 
     # 分页：has_more=1 时继续，最多 5 页防异常死循环（正常一次即可拉完）
     for _ in range(5):
@@ -707,7 +850,13 @@ def _sync_and_collect(open_kfid: str, token: str) -> list:
             break
 
         for msg in data.get("msg_list") or []:
-            item = _route_synced_msg(redis, open_kfid, msg)
+            msg_kfid = msg.get("open_kfid") or open_kfid
+            welcome_item = _handle_synced_event(redis, msg_kfid, msg)
+            if welcome_item:
+                to_welcome.append(welcome_item)
+                continue
+
+            item = _route_synced_msg(redis, msg_kfid, msg)
             if item:
                 to_reply.append(item)
 
@@ -718,13 +867,13 @@ def _sync_and_collect(open_kfid: str, token: str) -> list:
         if not data.get("has_more"):
             break
 
-    return to_reply
+    return to_reply, to_welcome
 
 
 async def _sync_and_reply_async(open_kfid: str, token: str) -> None:
-    """kf_msg_or_event 后台协程：sync_msg 网络/DB 逻辑放线程池，回复任务回事件循环调度"""
+    """kf_msg_or_event 后台协程：sync_msg 网络/DB 逻辑放线程池，回复与欢迎语任务回事件循环调度"""
     try:
-        to_reply = await asyncio.to_thread(_sync_and_collect, open_kfid, token)
+        to_reply, to_welcome = await asyncio.to_thread(_sync_and_collect, open_kfid, token)
     except Exception as exc:
         structured_log(
             event="wechat_kf_sync_task_error",
@@ -733,6 +882,12 @@ async def _sync_and_reply_async(open_kfid: str, token: str) -> None:
             extra={"open_kfid": open_kfid},
         )
         return
+
+    # 调度欢迎语推送（优先使用 welcome_code 调 send_msg_on_event）
+    for w in to_welcome:
+        asyncio.create_task(_push_welcome(w["open_kf_id"], w["touser"], w.get("welcome_code")))
+
+    # 调度文本回复
     for item in to_reply:
         asyncio.create_task(_handle_wechat_reply(
             session_id=item["session_id"],
@@ -742,3 +897,5 @@ async def _sync_and_reply_async(open_kfid: str, token: str) -> None:
             state=item["state"],
             hit_keyword=item["hit_keyword"],
         ))
+
+

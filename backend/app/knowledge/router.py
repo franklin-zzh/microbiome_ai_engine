@@ -1,4 +1,4 @@
-﻿"""知识库域（横切共享，mb_ai_engine.core_*）：REST 路由
+"""知识库域（横切共享，mb_ai_engine.core_*）：REST 路由
 
 - router（/knowledge）：CS 原始文档上传（asset/document/version 生命周期）与销售案例提交
 - admin_router（/admin）：CS 文档审核 / 下载 / 列表
@@ -31,6 +31,8 @@ from app.knowledge.models import (
     UnansweredStatus,
 )
 from app.knowledge.schemas import (
+    AssetContentOut,
+    BatchReviewRequest,
     GenericMessageResponse,
     KnowledgeAssetOut,
     KnowledgeDocumentCreate,
@@ -65,7 +67,13 @@ settings = get_settings()
 
 
 @router.post("/documents/assets", response_model=KnowledgeAssetOut, dependencies=[Depends(require_admin)])
-def upload_cs_document_asset(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_cs_document_asset(
+    file: UploadFile = File(...),
+    source_type: str = Query("UPLOAD"),
+    source_domain: str | None = Query(None),
+    source_url: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
     """保存不可变原文件并登记资产；此操作不会调用 Dify、不会创建线上知识。"""
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -90,6 +98,9 @@ def upload_cs_document_asset(file: UploadFile = File(...), db: Session = Depends
 
     asset = KnowledgeAsset(
         original_filename=file.filename or name,
+        source_type=source_type,
+        source_domain=source_domain,
+        source_url=source_url,
         mime_type=file.content_type,
         size_bytes=size,
         sha256=digest.hexdigest(),
@@ -261,6 +272,111 @@ def reject_cs_document_version(
     if version.publish_targets:
         background_tasks.add_task(revoke_document_version, version.id, KnowledgeVersionStatus.REJECTED)
     return GenericMessageResponse(message="Rejected")
+
+
+@admin_router.post("/knowledge/document-versions/batch-approve", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def batch_approve_cs_document_versions(
+    body: BatchReviewRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """一键批量审核通过并安排 Dify 发布。"""
+    versions = (
+        db.query(KnowledgeDocumentVersion)
+        .filter(
+            KnowledgeDocumentVersion.id.in_(body.version_ids),
+            KnowledgeDocumentVersion.status.in_([KnowledgeVersionStatus.DRAFT, KnowledgeVersionStatus.PENDING, KnowledgeVersionStatus.APPROVED]),
+        )
+        .all()
+    )
+    if not versions:
+        raise HTTPException(status_code=400, detail="No eligible versions found for approval")
+
+    now = datetime.now()
+    approved_ids = []
+    for v in versions:
+        v.status = KnowledgeVersionStatus.APPROVED
+        v.reviewed_by = body.operator
+        v.review_note = body.review_note
+        v.reviewed_at = now
+        approved_ids.append(v.id)
+
+    db.commit()
+
+    # 异步逐一推送到 Dify Pipeline
+    for vid in approved_ids:
+        background_tasks.add_task(publish_document_version, vid)
+
+    return GenericMessageResponse(
+        message=f"Successfully approved {len(approved_ids)} versions; Dify publish scheduled"
+    )
+
+
+@admin_router.post("/knowledge/document-versions/batch-reject", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])
+def batch_reject_cs_document_versions(
+    body: BatchReviewRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """一键批量驳回待审核版本。"""
+    versions = (
+        db.query(KnowledgeDocumentVersion)
+        .filter(
+            KnowledgeDocumentVersion.id.in_(body.version_ids),
+            KnowledgeDocumentVersion.status != KnowledgeVersionStatus.PUBLISHED,
+        )
+        .all()
+    )
+    if not versions:
+        raise HTTPException(status_code=400, detail="No eligible versions found for rejection")
+
+    now = datetime.now()
+    rejected_ids = []
+    for v in versions:
+        v.status = KnowledgeVersionStatus.REJECTED
+        v.reviewed_by = body.operator
+        v.review_note = body.review_note
+        v.reviewed_at = now
+        rejected_ids.append(v.id)
+
+    db.commit()
+
+    for vid in rejected_ids:
+        background_tasks.add_task(revoke_document_version, vid, KnowledgeVersionStatus.REJECTED)
+
+    return GenericMessageResponse(message=f"Successfully rejected {len(rejected_ids)} versions")
+
+
+@admin_router.get("/knowledge/assets/{asset_id}/content", response_model=AssetContentOut, dependencies=[Depends(require_admin)])
+def get_cs_asset_content(asset_id: int, db: Session = Depends(get_db)):
+    """获取资产文件的纯文本/Markdown内容，用于前端实时预览。"""
+    asset = db.query(KnowledgeAsset).filter(KnowledgeAsset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Knowledge asset not found")
+    try:
+        path = asset_file_path(asset)
+        text_content = path.read_text(encoding="utf-8", errors="replace")
+        return AssetContentOut(
+            asset_id=asset.id,
+            filename=asset.original_filename,
+            content=text_content,
+            source_url=asset.source_url,
+            source_domain=asset.source_domain,
+            source_type=asset.source_type,
+            size_bytes=asset.size_bytes,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=f"Source asset file error: {exc}") from None
+
+
+@admin_router.get("/knowledge/document-versions/{version_id}/preview", response_model=AssetContentOut, dependencies=[Depends(require_admin)])
+def preview_cs_version_content(version_id: int, db: Session = Depends(get_db)):
+    """通过版本 ID 直接获取对应资产的文本内容供预览。"""
+    version = db.query(KnowledgeDocumentVersion).filter(KnowledgeDocumentVersion.id == version_id).first()
+    if not version or not version.asset:
+        raise HTTPException(status_code=404, detail="Knowledge version or asset not found")
+    return get_cs_asset_content(version.asset_id, db=db)
+
 
 
 @admin_router.post("/knowledge/document-versions/{version_id}/revoke", response_model=GenericMessageResponse, dependencies=[Depends(require_admin)])

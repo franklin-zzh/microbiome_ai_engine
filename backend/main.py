@@ -47,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_router, prefix="/api/v1")
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(sales_router, prefix="/api/v1")
+    app.include_router(sales_router, prefix="")  # 兼容 https://wx.fmtcloud.cn/wx/sales/msg
     app.include_router(wechat_router, prefix="/api/v1")
     app.include_router(wechat_router, prefix="")  # 兼容 https://wx.fmtcloud.cn/wx/msg
     # 审核后台单页（backend/public/admin）；uploads 不挂静态目录，只走鉴权下载接口

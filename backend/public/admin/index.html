@@ -1,106 +1,183 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>知识库审核后台</title>
+<title>知识库审核与管理后台</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: "Microsoft YaHei", system-ui, sans-serif; background: #f5f6f8; color: #222; }
-  header { background: #1f2d3d; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
-  header h1 { font-size: 18px; flex: 1; }
-  #logout { background: none; border: 1px solid #ffffff66; color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; }
-  main { max-width: 1200px; margin: 20px auto; padding: 0 16px; }
-  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px #0000001a; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "Microsoft YaHei", sans-serif; background: #f4f6f9; color: #222; }
+  header { background: #1a2332; color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  header h1 { font-size: 18px; font-weight: 600; flex: 1; display: flex; align-items: center; gap: 8px; }
+  #logout { background: none; border: 1px solid rgba(255,255,255,0.4); color: #fff; padding: 4px 12px; border-radius: 4px; cursor: pointer; transition: 0.2s; }
+  #logout:hover { background: rgba(255,255,255,0.1); }
+  main { max-width: 1350px; margin: 20px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 16px; }
+  .card { background: #fff; border-radius: 8px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); border: 1px solid #e8ecf1; }
   .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-  input, select, textarea { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  input, select, textarea { padding: 7px 11px; border: 1px solid #d0d7de; border-radius: 5px; font-size: 13px; outline: none; transition: border-color 0.2s; }
+  input:focus, select:focus, textarea:focus { border-color: #2b73ff; box-shadow: 0 0 0 2px rgba(43,115,255,0.15); }
   textarea { width: 100%; min-height: 90px; resize: vertical; font-family: inherit; }
-  button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
-  .btn-primary { background: #3370ff; color: #fff; }
+  button { padding: 6px 14px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; transition: 0.15s; }
+  button:hover { opacity: 0.9; }
+  button:active { transform: scale(0.98); }
+  .btn-primary { background: #2b73ff; color: #fff; }
   .btn-success { background: #00b42a; color: #fff; }
   .btn-danger { background: #f53f3f; color: #fff; }
   .btn-warn { background: #ff7d00; color: #fff; }
-  .btn-ghost { background: #f2f3f5; color: #333; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
-  th { background: #fafbfc; color: #666; font-weight: 600; white-space: nowrap; }
-  tr.clickable { cursor: pointer; }
-  tr.clickable:hover { background: #f0f5ff; }
-  .tag { display: inline-block; background: #e8f3ff; color: #3370ff; border-radius: 3px; padding: 1px 6px; margin: 0 4px 2px 0; font-size: 12px; }
-  .badge { display: inline-block; border-radius: 3px; padding: 1px 8px; font-size: 12px; }
-  .b-PENDING { background: #fff7e6; color: #d48806; }
-  .b-APPROVED { background: #e8f8ec; color: #00b42a; }
-  .b-REJECTED { background: #ffece8; color: #f53f3f; }
-  .b-REVOKED { background: #f2f3f5; color: #666; }
-  .b-PUBLISHED { background: #e8f8ec; color: #00b42a; }
-  .b-SUPERSEDED { background: #f2f3f5; color: #666; }
-  .b-DRAFT { background: #f2f3f5; color: #666; }
-  .detail { white-space: pre-wrap; background: #fafbfc; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 14px; line-height: 1.7; }
-  .meta { color: #888; font-size: 12px; margin-top: 8px; }
-  .actions { margin-top: 12px; display: flex; gap: 8px; }
-  #loginBox { max-width: 360px; margin: 80px auto; }
-  #loginBox .card { padding: 24px; }
+  .btn-ghost { background: #f2f3f5; color: #333; border: 1px solid #e5e6eb; }
+  .btn-ghost:hover { background: #e5e6eb; }
+  .btn-sm { padding: 4px 9px; font-size: 12px; }
+
+  /* 批量操作条 */
+  .batch-bar { display: flex; align-items: center; gap: 12px; background: #e8f3ff; border: 1px solid #b3d7ff; padding: 10px 16px; border-radius: 6px; margin-bottom: 12px; }
+  .batch-count { font-weight: 600; color: #165dff; font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 10px 12px; border-bottom: 1px solid #f0f2f5; text-align: left; vertical-align: middle; }
+  th { background: #fafbfc; color: #555; font-weight: 600; white-space: nowrap; border-top: 1px solid #f0f2f5; }
+  tr.clickable { cursor: pointer; transition: background 0.15s; }
+  tr.clickable:hover { background: #f7f9fc; }
+  tr.active-row { background: #f0f6ff !important; font-weight: 500; }
+  tr.active-row td { border-bottom: none; }
+
+  /* 表格内直接下拉展开容器 */
+  tr.expand-row { background: #f8fafc; }
+  tr.expand-row > td { padding: 0 0 16px 0; border-bottom: 2px solid #2b73ff; }
+  .expand-container { margin: 0 12px; background: #fff; border: 1px solid #dbe3ed; border-radius: 8px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); animation: slideDown 0.2s ease-out; }
+  @keyframes slideDown { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .expand-header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #edf2f7; padding-bottom: 10px; margin-bottom: 12px; }
+  .expand-title { font-size: 15px; font-weight: 600; color: #1d2129; display: flex; align-items: center; gap: 8px; }
+  
+  .tag { display: inline-block; background: #f0f4ff; color: #2b73ff; border-radius: 3px; padding: 2px 7px; margin: 0 4px 2px 0; font-size: 11px; border: 1px solid #d6e4ff; }
+  .tag-source { background: #e8f8ec; color: #00b42a; border-color: #b7eb8f; }
+  .badge { display: inline-block; border-radius: 3px; padding: 2px 8px; font-size: 12px; font-weight: 500; }
+  .b-PENDING { background: #fff7e6; color: #d48806; border: 1px solid #ffd591; }
+  .b-APPROVED { background: #e8f8ec; color: #00b42a; border: 1px solid #b7eb8f; }
+  .b-REJECTED { background: #ffece8; color: #f53f3f; border: 1px solid #ffa39e; }
+  .b-REVOKED { background: #f2f3f5; color: #86909c; }
+  .b-PUBLISHED { background: #e8f8ec; color: #00b42a; border: 1px solid #b7eb8f; }
+  .b-SUPERSEDED { background: #f2f3f5; color: #86909c; }
+  .b-DRAFT { background: #f2f3f5; color: #86909c; }
+
+  /* 下拉抽屉内：左右分栏 */
+  .detail-grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; }
+  @media (max-width: 950px) { .detail-grid { grid-template-columns: 1fr; } }
+  
+  .version-list { display: flex; flex-direction: column; gap: 10px; max-height: 480px; overflow-y: auto; }
+  .version-card { background: #fafbfc; border: 1px solid #e5e6eb; border-radius: 6px; padding: 12px; cursor: pointer; transition: 0.15s; }
+  .version-card:hover { border-color: #b3d7ff; }
+  .version-card.active { border-color: #2b73ff; background: #fff; box-shadow: 0 2px 8px rgba(43,115,255,0.12); }
+
+  .preview-panel { background: #fff; border: 1px solid #e5e6eb; border-radius: 6px; display: flex; flex-direction: column; overflow: hidden; height: 480px; }
+  .preview-header { background: #fafbfc; padding: 10px 14px; border-bottom: 1px solid #e5e6eb; display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+  .preview-body { flex: 1; padding: 16px; overflow-y: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; color: #24292f; background: #fff; }
+
+  .meta { color: #86909c; font-size: 12px; }
+  .meta a { color: #2b73ff; text-decoration: none; }
+  .meta a:hover { text-decoration: underline; }
+  .actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  
+  .chevron { display: inline-block; transition: transform 0.2s; color: #86909c; font-size: 11px; margin-right: 4px; }
+  .chevron.open { transform: rotate(90deg); color: #2b73ff; }
+
+  #loginBox { max-width: 380px; margin: 90px auto; }
+  #loginBox .card { padding: 28px; }
   #loginBox .row { flex-direction: column; align-items: stretch; }
-  .msg { color: #f53f3f; font-size: 13px; min-height: 18px; }
-  .filters { margin-bottom: 12px; }
-  .hidden { display: none; }
+  .msg { color: #f53f3f; font-size: 13px; min-height: 18px; margin-top: 6px; }
+  .filters { margin-bottom: 14px; gap: 10px; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <header>
-  <h1>📚 知识库审核后台</h1>
-  <span id="userName"></span>
+  <h1>📚 知识库审核与管理后台</h1>
+  <span id="userName" class="meta" style="color:#d0d7de"></span>
   <button id="logout" class="hidden">退出</button>
 </header>
 
 <div id="loginBox" class="hidden">
   <div class="card">
-    <h2 style="margin-bottom:12px">登录</h2>
+    <h2 style="margin-bottom:14px; font-size:18px">管理员登录</h2>
     <div class="row">
       <input id="username" placeholder="用户名" autocomplete="username">
       <input id="password" type="password" placeholder="密码" autocomplete="current-password">
-      <button class="btn-primary" onclick="login()">登录</button>
+      <button class="btn-primary" onclick="login()" style="justify-content:center; padding:9px">登录</button>
       <div class="msg" id="loginMsg"></div>
     </div>
   </div>
 </div>
 
 <main id="mainBox" class="hidden">
+
+  <!-- 手工上传区域（可折叠） -->
   <div class="card" id="csDocumentCard">
-    <h3 style="margin-bottom:10px">📄 CS 原始文档上传</h3>
-    <p class="meta" style="margin-bottom:10px">上传原始文件；审核通过后按「知识库形态」发布：<b>QA 生成</b> → 问答库（Dify FILE → QA Processor → KB Pipeline）；<b>文本切割</b> → 长文档库（create_by_file 原生切块）。版本号按每份文档独立递增。</p>
-    <div class="row" style="margin-bottom:8px">
-      <input id="csDocTitle" placeholder="逻辑文档标题，例如：检测报告 FAQ" style="flex:2; min-width:220px">
-      <input id="csDocCategory" placeholder="分类（默认 GENERAL）" style="flex:1; min-width:180px">
-      <input id="csDocTags" placeholder="标签（逗号分隔）" style="flex:1; min-width:160px">
+    <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer" onclick="toggleUploadCard()">
+      <h3 style="font-size:14px; color:#4e5969; display:flex; align-items:center; gap:6px">
+        <span id="uploadChevron" class="chevron">▶</span> 📄 手工单篇文档上传
+      </h3>
+      <span class="meta">点击展开/收起</span>
     </div>
-    <div class="row">
-      <select id="csDocForm">
-        <option value="qa_model">QA 生成（问答库 / Pipeline）</option>
-        <option value="text_model">文本切割（长文档库 / 原生切块）</option>
-      </select>
-      <input type="file" id="csDocFile" accept=".pdf,.doc,.docx,.txt,.md">
-      <button class="btn-primary" onclick="createCsDocument()">上传并创建 V1.0 待审版</button>
-      <span id="csDocMsg" class="meta"></span>
+    <div id="uploadContent" class="hidden" style="margin-top:12px">
+      <p class="meta" style="margin-bottom:12px">支持上传 PDF/Word/Markdown；审核通过后按知识库形态自动发布到 Dify（爬虫爬取的文档可通过命令行 <code>.\ingest.bat</code> 批量导入）。</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="csDocTitle" placeholder="文档标题（如：产品手册 FAQ）" style="flex:2; min-width:220px">
+        <input id="csDocCategory" placeholder="分类（如：WEBSITE_KNOWLEDGE）" style="flex:1; min-width:180px">
+        <input id="csDocTags" placeholder="标签（逗号分隔，如：cs, faq）" style="flex:1; min-width:160px">
+      </div>
+      <div class="row">
+        <select id="csDocForm">
+          <option value="text_model">文本切割（长文档库 / Dify 原生切块）</option>
+          <option value="qa_model">QA 生成（问答库 / Pipeline）</option>
+        </select>
+        <input type="file" id="csDocFile" accept=".pdf,.doc,.docx,.txt,.md">
+        <button class="btn-primary" onclick="createCsDocument()">上传并创建待审版</button>
+        <span id="csDocMsg" class="meta"></span>
+      </div>
     </div>
   </div>
 
+  <!-- 文档列表与批量操作 -->
   <div class="card">
     <div class="row filters">
-      <h3 style="flex:1">📚 CS 文档版本</h3>
+      <h3 style="flex:1; font-size:16px">📚 文档库审核列表</h3>
       <select id="fCsDocStatus" onchange="loadCsDocuments()">
-        <option value="">全部版本</option><option value="PENDING">待审核</option><option value="APPROVED">审核通过/发布中</option>
-        <option value="PUBLISHED">已发布</option><option value="SUPERSEDED">已替代</option><option value="REJECTED">已驳回</option><option value="REVOKED">已下线</option>
+        <option value="">全部状态</option>
+        <option value="PENDING" selected>🟡 待审核 (PENDING)</option>
+        <option value="APPROVED">🟢 审核通过/发布中</option>
+        <option value="PUBLISHED">✅ 已发布 (PUBLISHED)</option>
+        <option value="REJECTED">🔴 已驳回</option>
+        <option value="SUPERSEDED">⚪ 已替代</option>
+        <option value="REVOKED">⚪ 已下线</option>
       </select>
-      <button class="btn-ghost" onclick="loadCsDocuments()">刷新</button>
+      <input id="fSearchCategory" placeholder="按分类/标签筛选..." style="width:160px" onkeydown="if(event.key==='Enter')loadCsDocuments()">
+      <button class="btn-ghost" onclick="loadCsDocuments()">刷新列表</button>
     </div>
-    <table><thead><tr><th>文档 ID</th><th>标题</th><th>形态</th><th>当前线上版本</th><th>版本数</th><th>分类</th></tr></thead>
-      <tbody id="csDocumentList"><tr><td colspan="6" class="meta">加载中…</td></tr></tbody></table>
-  </div>
 
-  <div class="card hidden" id="csDocumentDetail">
-    <div class="row" style="margin-bottom:8px"><h3 style="flex:1">🔎 CS 文档 #<span id="csDId"></span></h3></div>
-    <div class="meta" id="csDMeta"></div><div id="csDVersions" style="margin-top:10px"></div>
+    <!-- 批量操作工具栏 -->
+    <div id="batchBar" class="batch-bar hidden">
+      <span class="batch-count" id="batchCountText">已选中 0 篇待审文档</span>
+      <div style="flex:1"></div>
+      <button class="btn-success" onclick="batchApproveSelected()">🚀 一键批量通过并发布</button>
+      <button class="btn-danger" onclick="batchRejectSelected()">🚫 批量驳回</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px; text-align:center"><input type="checkbox" id="chkSelectAll" onchange="toggleSelectAll(this)" title="全选当前页"></th>
+          <th style="width:60px">ID</th>
+          <th>文档标题（点击行内就地下拉预览）</th>
+          <th>来源与站点</th>
+          <th style="width:70px">形态</th>
+          <th style="width:140px">待审/当前版本</th>
+          <th style="width:120px">分类</th>
+        </tr>
+      </thead>
+      <tbody id="csDocumentList">
+        <tr><td colspan="7" class="meta">加载中…</td></tr>
+      </tbody>
+    </table>
   </div>
 
 </main>
@@ -108,6 +185,9 @@
 <script>
 const API = "/api/v1";
 let token = localStorage.getItem("kb_token") || "";
+let loadedDocuments = [];
+let selectedVersionMap = new Map(); // version_id -> document_id
+let currentOpenDocId = null;
 
 function hdr(json = false) {
   const h = {};
@@ -115,6 +195,7 @@ function hdr(json = false) {
   if (json) h["Content-Type"] = "application/json";
   return h;
 }
+
 async function api(path, method = "GET", body = null) {
   const opt = { method, headers: hdr(body && !(body instanceof FormData)) };
   if (body && !(body instanceof FormData)) opt.body = JSON.stringify(body);
@@ -128,10 +209,18 @@ async function api(path, method = "GET", body = null) {
   }
   return r.status === 204 ? null : r.json();
 }
+
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 function showLogin() { document.getElementById("loginBox").classList.remove("hidden"); document.getElementById("mainBox").classList.add("hidden"); }
 function showMain() { document.getElementById("loginBox").classList.add("hidden"); document.getElementById("mainBox").classList.remove("hidden"); }
+
+function toggleUploadCard() {
+  const c = document.getElementById("uploadContent");
+  const ch = document.getElementById("uploadChevron");
+  c.classList.toggle("hidden");
+  ch.classList.toggle("open");
+}
 
 async function login() {
   const u = document.getElementById("username").value.trim();
@@ -140,18 +229,24 @@ async function login() {
   try {
     const j = await api("/auth/login", "POST", { username: u, password: p });
     token = j.access_token; localStorage.setItem("kb_token", token);
-    document.getElementById("userName").textContent = j.role === "admin" ? "管理员" : j.role;
+    document.getElementById("userName").textContent = j.role === "admin" ? "管理员 (" + u + ")" : j.role;
     document.getElementById("logout").classList.remove("hidden");
     showMain(); loadCsDocuments();
   } catch (e) { document.getElementById("loginMsg").textContent = "登录失败：" + e.message; }
 }
-document.getElementById("logout").onclick = () => { token = ""; localStorage.removeItem("kb_token"); document.getElementById("userName").textContent = ""; document.getElementById("logout").classList.add("hidden"); showLogin(); };
+
+document.getElementById("logout").onclick = () => {
+  token = ""; localStorage.removeItem("kb_token");
+  document.getElementById("userName").textContent = "";
+  document.getElementById("logout").classList.add("hidden");
+  showLogin();
+};
 
 async function createCsDocument() {
   const title = document.getElementById("csDocTitle").value.trim();
   const file = document.getElementById("csDocFile").files[0];
   const msg = document.getElementById("csDocMsg");
-  if (!title || !file) { msg.textContent = "请填写标题并选择原始文件"; return; }
+  if (!title || !file) { msg.textContent = "请填写标题并选择文件"; return; }
   msg.textContent = "正在上传原始文件…";
   try {
     const form = new FormData(); form.append("file", file);
@@ -164,57 +259,291 @@ async function createCsDocument() {
       created_by: "admin",
     });
     msg.textContent = `已创建文档 #${doc.id}，V1.0 待审核`;
-    document.getElementById("csDocTitle").value = ""; document.getElementById("csDocCategory").value = "";
-    document.getElementById("csDocTags").value = ""; document.getElementById("csDocFile").value = "";
-    loadCsDocuments(); openCsDocument(doc.id);
+    document.getElementById("csDocTitle").value = "";
+    document.getElementById("csDocCategory").value = "";
+    document.getElementById("csDocTags").value = "";
+    document.getElementById("csDocFile").value = "";
+    loadCsDocuments(); toggleInlineDetail(doc.id);
   } catch (e) { msg.textContent = "创建失败：" + e.message; }
 }
 
 async function loadCsDocuments() {
   const status = document.getElementById("fCsDocStatus").value;
-  const q = new URLSearchParams({ limit: "50" }); if (status) q.set("version_status", status);
+  const cat = document.getElementById("fSearchCategory").value.trim();
+  const q = new URLSearchParams({ limit: "100" });
+  if (status) q.set("version_status", status);
+  if (cat) q.set("category", cat);
+
+  selectedVersionMap.clear();
+  currentOpenDocId = null;
+  updateBatchUI();
+
   try {
     const data = await api("/admin/knowledge/documents?" + q.toString());
+    loadedDocuments = data.items || [];
     const body = document.getElementById("csDocumentList");
-    if (!data.items.length) { body.innerHTML = '<tr><td colspan="6" class="meta">暂无文档</td></tr>'; return; }
-    body.innerHTML = data.items.map(doc => {
-      const current = doc.versions.find(v => v.id === doc.current_version_id);
+    if (!loadedDocuments.length) { body.innerHTML = '<tr><td colspan="7" class="meta" style="text-align:center; padding:30px">暂无符合条件的文档</td></tr>'; return; }
+
+    body.innerHTML = loadedDocuments.map(doc => {
+      // 优先匹配当前筛选状态的版本，或可审核/重试的版本（PENDING / DRAFT / APPROVED）
+      let targetVer = null;
+      if (status) {
+        targetVer = (doc.versions || []).slice().reverse().find(v => v.status === status);
+      }
+      if (!targetVer) {
+        targetVer = (doc.versions || []).slice().reverse().find(v => v.status === "PENDING" || v.status === "DRAFT" || v.status === "APPROVED");
+      }
+      if (!targetVer && doc.versions && doc.versions.length > 0) {
+        targetVer = doc.versions[doc.versions.length - 1];
+      }
+
+      const activeVer = (doc.versions || []).find(v => v.id === doc.current_version_id);
+      const displayVer = targetVer || activeVer || (doc.versions && doc.versions[doc.versions.length - 1]);
+
       const formLabel = { qa_model: "QA", text_model: "文本", hierarchical_model: "层级" }[doc.doc_form] || doc.doc_form;
-      return `<tr class="clickable" onclick="openCsDocument(${doc.id})"><td>${doc.id}</td><td>${esc(doc.title)}</td><td><span class="tag">${formLabel}</span></td><td>${current ? 'V1.' + (current.revision - 1) + ' / ' + esc(current.status) : '-'}</td><td>${doc.versions.length}</td><td>${esc(doc.category)}</td></tr>`;
+      const sourceTag = (doc.tags || []).find(t => t.startsWith("source:"));
+      const sourceDomain = sourceTag ? sourceTag.replace("source:", "") : "";
+
+      const chkBox = targetVer
+        ? `<input type="checkbox" class="doc-chk" data-vid="${targetVer.id}" onclick="onRowCheckChange(event, ${targetVer.id}, ${doc.id})">`
+        : `<input type="checkbox" disabled title="无可选版本">`;
+
+      return `<tr class="clickable" id="docRow_${doc.id}" onclick="toggleInlineDetail(${doc.id})">
+        <td style="text-align:center" onclick="event.stopPropagation()">${chkBox}</td>
+        <td><b>#${doc.id}</b></td>
+        <td>
+          <div style="font-weight:600; color:#1d2129; display:flex; align-items:center">
+            <span id="chevron_${doc.id}" class="chevron">▶</span> ${esc(doc.title)}
+          </div>
+          <div class="meta" style="margin-left:14px">${(doc.tags || []).map(t => `<span class="tag ${t.startsWith('source:') ? 'tag-source' : ''}">${esc(t)}</span>`).join('')}</div>
+        </td>
+        <td>${sourceDomain ? `<span class="tag tag-source">🌐 ${esc(sourceDomain)}</span>` : '<span class="meta">手工</span>'}</td>
+        <td><span class="tag">${formLabel}</span></td>
+        <td>
+          ${displayVer ? `<span class="badge b-${displayVer.status}">V1.${displayVer.revision - 1} ${displayVer.status}</span>` : '-'}
+        </td>
+        <td><span class="meta">${esc(doc.category)}</span></td>
+      </tr>`;
     }).join("");
-  } catch (e) { document.getElementById("csDocumentList").innerHTML = '<tr><td colspan="6" class="meta">加载失败：' + esc(e.message) + '</td></tr>'; }
+  } catch (e) {
+    document.getElementById("csDocumentList").innerHTML = '<tr><td colspan="7" class="msg">加载失败：' + esc(e.message) + '</td></tr>';
+  }
 }
 
-async function openCsDocument(id) {
+function onRowCheckChange(e, versionId, docId) {
+  if (e.target.checked) {
+    selectedVersionMap.set(versionId, docId);
+  } else {
+    selectedVersionMap.delete(versionId);
+  }
+  updateBatchUI();
+}
+
+function toggleSelectAll(masterChk) {
+  const chks = document.querySelectorAll(".doc-chk");
+  chks.forEach(chk => {
+    chk.checked = masterChk.checked;
+    const vid = parseInt(chk.dataset.vid);
+    if (masterChk.checked && vid) {
+      selectedVersionMap.set(vid, true);
+    }
+  });
+  if (!masterChk.checked) selectedVersionMap.clear();
+  updateBatchUI();
+}
+
+function updateBatchUI() {
+  const count = selectedVersionMap.size;
+  const bar = document.getElementById("batchBar");
+  if (count > 0) {
+    bar.classList.remove("hidden");
+    document.getElementById("batchCountText").textContent = `已选中 ${count} 篇文档`;
+  } else {
+    bar.classList.add("hidden");
+    const master = document.getElementById("chkSelectAll");
+    if (master) master.checked = false;
+  }
+}
+
+async function batchApproveSelected() {
+  const vids = Array.from(selectedVersionMap.keys());
+  if (!vids.length) return;
+  if (!confirm(`确认【一键批量通过并发布 / 重试同步】选中的 ${vids.length} 篇文档到 Dify？`)) return;
+
+  try {
+    const res = await api("/admin/knowledge/document-versions/batch-approve", "POST", {
+      version_ids: vids,
+      operator: "admin",
+      review_note: "批量审批通过"
+    });
+    alert(res.message || "批量发布成功！");
+    loadCsDocuments();
+  } catch (e) {
+    alert("批量审批失败：" + e.message);
+  }
+}
+
+async function batchRejectSelected() {
+  const vids = Array.from(selectedVersionMap.keys());
+  if (!vids.length) return;
+  if (!confirm(`确认【批量驳回】选中的 ${vids.length} 个版本？`)) return;
+
+  try {
+    const res = await api("/admin/knowledge/document-versions/batch-reject", "POST", {
+      version_ids: vids,
+      operator: "admin",
+      review_note: "批量驳回"
+    });
+    alert(res.message || "已批量驳回");
+    loadCsDocuments();
+  } catch (e) {
+    alert("批量驳回失败：" + e.message);
+  }
+}
+
+/* ============ 表格行内下拉展开详情与正文预览 ============ */
+async function toggleInlineDetail(id) {
+  const row = document.getElementById(`docRow_${id}`);
+  const chevron = document.getElementById(`chevron_${id}`);
+  const existingExpand = document.getElementById(`expandRow_${id}`);
+
+  // 如果已经展开，则收起
+  if (existingExpand) {
+    existingExpand.remove();
+    row.classList.remove("active-row");
+    if (chevron) chevron.classList.remove("open");
+    if (currentOpenDocId === id) currentOpenDocId = null;
+    return;
+  }
+
+  // 关闭之前展开的行
+  if (currentOpenDocId && currentOpenDocId !== id) {
+    const prevExpand = document.getElementById(`expandRow_${currentOpenDocId}`);
+    if (prevExpand) prevExpand.remove();
+    const prevRow = document.getElementById(`docRow_${currentOpenDocId}`);
+    if (prevRow) prevRow.classList.remove("active-row");
+    const prevChevron = document.getElementById(`chevron_${currentOpenDocId}`);
+    if (prevChevron) prevChevron.classList.remove("open");
+  }
+
+  currentOpenDocId = id;
+  row.classList.add("active-row");
+  if (chevron) chevron.classList.add("open");
+
+  // 插入展开行
+  const expandTr = document.createElement("tr");
+  expandTr.id = `expandRow_${id}`;
+  expandTr.className = "expand-row";
+  expandTr.innerHTML = `<td colspan="7">
+    <div class="expand-container">
+      <div class="expand-header">
+        <div class="expand-title">
+          <span>🔎 文档详情 & 正文实时预览</span>
+          <span class="meta" id="inlineMeta_${id}">加载元数据…</span>
+        </div>
+        <button class="btn-ghost btn-sm" onclick="toggleInlineDetail(${id})">收起 ✕</button>
+      </div>
+      <div class="detail-grid">
+        <div class="version-list" id="inlineVersions_${id}">加载版本信息…</div>
+        <div class="preview-panel">
+          <div class="preview-header">
+            <strong>📝 清洗后 Markdown 正文预览</strong>
+            <span class="meta" id="inlinePreviewMeta_${id}">点击版本加载正文</span>
+          </div>
+          <div class="preview-body" id="inlinePreviewContent_${id}">正文读取中…</div>
+        </div>
+      </div>
+    </div>
+  </td>`;
+
+  row.insertAdjacentElement("afterend", expandTr);
+
   try {
     const doc = await api(`/admin/knowledge/documents/${id}`);
-    document.getElementById("csDocumentDetail").classList.remove("hidden");
-    document.getElementById("csDId").textContent = doc.id;
-    document.getElementById("csDMeta").textContent = `当前线上版本：${doc.current_version_id || '无'} ｜ 形态：${doc.doc_form} ｜ 分类：${doc.category} ｜ 标签：${(doc.tags || []).join('、') || '-'}`;
-    document.getElementById("csDVersions").innerHTML = doc.versions.map(v => {
+    document.getElementById(`inlineMeta_${id}`).innerHTML = `<b>#${doc.id}</b> ｜ <b>形态:</b> ${doc.doc_form} ｜ <b>分类:</b> ${doc.category} ｜ <b>当前线上:</b> ${doc.current_version_id ? 'V' + doc.current_version_id : '未发布'}`;
+
+    const vList = document.getElementById(`inlineVersions_${id}`);
+    vList.innerHTML = doc.versions.map((v, idx) => {
       const target = (v.publish_targets || [])[0];
       const state = target ? `${target.status}${target.last_error ? '：' + target.last_error : ''}` : "未发布";
-      const buttons = v.status === "PENDING" || v.status === "DRAFT"
-        ? `<button class="btn-success" onclick="reviewCsVersion(${v.id},'approve')">通过并发布</button><button class="btn-danger" onclick="reviewCsVersion(${v.id},'reject')">驳回</button>`
-        : v.status === "APPROVED" ? `<button class="btn-primary" onclick="retryCsVersion(${v.id})">重试发布</button><button class="btn-danger" onclick="reviewCsVersion(${v.id},'reject')">驳回</button>`
-        : v.status === "PUBLISHED" ? `<button class="btn-warn" onclick="reviewCsVersion(${v.id},'revoke')">下线</button>` : "";
-      return `<div class="detail"><b>V1.${v.revision - 1}</b>　<span class="badge b-${v.status}">${v.status}</span><br>原文件：<a href="javascript:downloadAsset(${v.asset_id})">下载</a> ｜ 内容 SHA256：${esc(v.content_sha256.slice(0, 12))}…<br>Pipeline：${esc(v.pipeline_version)} ｜ 发布状态：${esc(state)}<br>块快照：${(target && target.blocks ? target.blocks.length : 0)} 条 ${buttons}</div>`;
+      
+      const buttons = (v.status === "PENDING" || v.status === "DRAFT")
+        ? `<button class="btn-success btn-sm" onclick="reviewCsVersion(${v.id},'approve',${id})">✓ 通过并发布</button><button class="btn-danger btn-sm" onclick="reviewCsVersion(${v.id},'reject',${id})">✕ 驳回</button>`
+        : v.status === "APPROVED"
+        ? `<button class="btn-primary btn-sm" onclick="retryCsVersion(${v.id},${id})">重试发布</button><button class="btn-danger btn-sm" onclick="reviewCsVersion(${v.id},'reject',${id})">驳回</button>`
+        : v.status === "PUBLISHED"
+        ? `<button class="btn-warn btn-sm" onclick="reviewCsVersion(${v.id},'revoke',${id})">下线</button>`
+        : "";
+
+      return `<div class="version-card ${idx === doc.versions.length - 1 ? 'active' : ''}" id="vCard_${v.id}" onclick="loadInlinePreview(${v.id}, ${v.asset_id}, ${id})">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px">
+          <b>V1.${v.revision - 1}</b>
+          <span class="badge b-${v.status}">${v.status}</span>
+        </div>
+        <div class="meta" style="line-height:1.6">
+          SHA256: <code>${esc(v.content_sha256.slice(0, 10))}…</code><br>
+          发布状态: <b>${esc(state)}</b> ｜ 块快照: ${(target && target.blocks ? target.blocks.length : 0)} 条<br>
+          原文件: <a href="javascript:downloadAsset(${v.asset_id})">下载源文件</a>
+        </div>
+        <div class="actions">${buttons}</div>
+      </div>`;
     }).join("");
-    document.getElementById("csDocumentDetail").scrollIntoView({ behavior: "smooth" });
-  } catch (e) { alert("加载 CS 文档失败：" + e.message); }
+
+    // 默认加载最新版本的正文预览
+    if (doc.versions && doc.versions.length > 0) {
+      const latest = doc.versions[doc.versions.length - 1];
+      loadInlinePreview(latest.id, latest.asset_id, id);
+    }
+  } catch (e) {
+    document.getElementById(`inlineVersions_${id}`).innerHTML = '<div class="msg">加载失败：' + esc(e.message) + '</div>';
+  }
 }
 
-async function reviewCsVersion(id, action) {
+async function loadInlinePreview(versionId, assetId, docId) {
+  const container = document.getElementById(`inlineVersions_${docId}`);
+  if (container) {
+    container.querySelectorAll(".version-card").forEach(c => c.classList.remove("active"));
+    const card = document.getElementById(`vCard_${versionId}`);
+    if (card) card.classList.add("active");
+  }
+
+  const previewBox = document.getElementById(`inlinePreviewContent_${docId}`);
+  const metaBox = document.getElementById(`inlinePreviewMeta_${docId}`);
+  if (!previewBox) return;
+
+  previewBox.textContent = "正文加载中…";
+
+  try {
+    const res = await api(`/admin/knowledge/document-versions/${versionId}/preview`);
+    if (metaBox) {
+      metaBox.innerHTML = `${res.source_url ? `来源: <a href="${esc(res.source_url)}" target="_blank">${esc(res.source_url)}</a> ｜ ` : ''}大小: ${(res.size_bytes / 1024).toFixed(1)} KB`;
+    }
+    previewBox.textContent = res.content || "（正文内容为空）";
+  } catch (e) {
+    previewBox.textContent = "加载正文失败：" + e.message;
+  }
+}
+
+async function reviewCsVersion(id, action, docId = null) {
   const label = { approve: "通过并发布", reject: "驳回", revoke: "下线" }[action];
   if (!confirm("确认" + label + "此版本？")) return;
   const note = prompt("审核备注（可选）") || null;
-  try { await api(`/admin/knowledge/document-versions/${id}/${action}`, "POST", { operator: "admin", review_note: note }); loadCsDocuments(); }
-  catch (e) { alert("操作失败：" + e.message); }
+  try {
+    await api(`/admin/knowledge/document-versions/${id}/${action}`, "POST", { operator: "admin", review_note: note });
+    loadCsDocuments();
+  } catch (e) {
+    alert("操作失败：" + e.message);
+  }
 }
 
-async function retryCsVersion(id) {
-  try { await api(`/admin/knowledge/document-versions/${id}/retry-publish`, "POST"); alert("已安排重试，请刷新查看发布状态"); loadCsDocuments(); }
-  catch (e) { alert("重试失败：" + e.message); }
+async function retryCsVersion(id, docId = null) {
+  try {
+    await api(`/admin/knowledge/document-versions/${id}/retry-publish`, "POST");
+    alert("已安排重试发布，请稍后刷新查看");
+    loadCsDocuments();
+  } catch (e) {
+    alert("重试失败：" + e.message);
+  }
 }
 
 async function downloadAsset(id) {

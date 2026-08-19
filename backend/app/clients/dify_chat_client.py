@@ -25,7 +25,9 @@ def _settings():
     return get_settings()
 
 
-def _api_key() -> str:
+def _api_key(custom_key: Optional[str] = None) -> str:
+    if custom_key:
+        return custom_key
     settings = _settings()
     key = settings.dify_chat_api_key or settings.dify_api_key
     if not key:
@@ -43,12 +45,14 @@ def chat_messages(
     conversation_id: Optional[str] = None,
     inputs: Optional[Dict[str, Any]] = None,
     timeout: Optional[int] = None,
+    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """调用 Dify ``chat-messages``（blocking），返回 {answer, conversation_id, message_id, retrieval_resources}。
 
     :param user: 渠道用户标识（企微 open_id / 公众号 openid），Dify 按 user 隔离会话；
     :param conversation_id: 已有会话 ID（多轮续聊）；None = 新会话；
     :param inputs: 工作流起始节点变量（本应用为空即可）。
+    :param api_key: 指定 Dify API Key（如招商 DIFY_SALES_CHAT_API_KEY），不传则使用默认客服 Key。
     """
     settings = _settings()
     body = {
@@ -63,7 +67,7 @@ def chat_messages(
     try:
         resp = httpx.post(
             f"{_base_url()}/chat-messages",
-            headers={"Authorization": f"Bearer {_api_key()}"},
+            headers={"Authorization": f"Bearer {_api_key(api_key)}"},
             json=body,
             timeout=timeout or settings.dify_chat_timeout_seconds,
             trust_env=False,  # 与 dify_knowledge_client 一致：禁用系统代理，避免本机代理导致的 502/超时

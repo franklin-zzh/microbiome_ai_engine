@@ -38,6 +38,42 @@ RISK_KEYWORDS = (
     "持续腹泻", "水样便", "频繁呕吐", "脓血便", "体重骤降", "不明原因消瘦",
     "肠梗阻", "肠穿孔", "肠癌", "直肠癌", "结肠癌", "高烧不退", "严重脱水",
 )
+# 高频日常问候词（Fast-Path 极速秒回）
+GREETING_KEYWORDS = (
+    "你好", "您好", "hi", "hello", "在吗", "在嘛", "在不", "有人吗", "客服在吗",
+    "早", "早上好", "中午好", "下午好", "晚上好", "嗨", "哈喽", "hey",
+    "您好呀", "你好呀", "你好啊", "您好啊",
+)
+# 快捷菜单与功能指引指令
+MENU_KEYWORDS = (
+    "菜单", "快捷菜单", "常见问题", "menu", "help", "帮助", "功能", "指引", "导航", "热门问题",
+)
+
+
+def is_pure_greeting(text: str) -> bool:
+    """判断是否为纯日常问候语（无具体业务问题，可走 Fast-Path 极速秒回）"""
+    import re
+    t = text.strip().lower()
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff]", "", t).strip()
+    if not cleaned:
+        return False
+    if cleaned in GREETING_KEYWORDS or t in GREETING_KEYWORDS:
+        return True
+    # 短问候（如 "你好呀", "嗨~", "在吗？", "哈喽呀"）
+    if len(cleaned) <= 5:
+        for kw in GREETING_KEYWORDS:
+            if kw in cleaned:
+                return True
+    return False
+
+
+def is_menu_request(text: str) -> bool:
+    """判断是否为请求快捷菜单指令"""
+    import re
+    t = text.strip().lower()
+    cleaned = re.sub(r"[^\w\u4e00-\u9fff]", "", t).strip()
+    return cleaned in MENU_KEYWORDS or t in MENU_KEYWORDS
+
 
 SESSION_STATE_KEY = "session:{session_id}:state"
 SESSION_NEG_KEY = "session:{session_id}:neg_streak"

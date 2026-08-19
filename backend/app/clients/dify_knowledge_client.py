@@ -57,6 +57,19 @@ def _base_url() -> str:
     return _settings().dify_base_url.rstrip("/")
 
 
+import re
+
+
+def sanitize_dify_filename(filename: str) -> str:
+    """清理文件名中 Dify 不支持的非法字符（如斜杠、冒号、换行等），确保符合 Dify 契约。"""
+    base = Path(filename).name
+    # 替换非法字符: \ / : * ? " < > | \r \n \t
+    clean = re.sub(r'[\\/:*?"<>|\r\n\t]', '_', base).strip(' ._')
+    if not clean:
+        clean = "document.md"
+    return clean
+
+
 # ============ 发布路径一：create_by_file 直传（text_model/hierarchical_model） ============
 
 
@@ -76,8 +89,9 @@ def create_by_file(
     默认使用 automatic 切分（``{"mode": "automatic"}``），可传入 custom 覆盖。
     返回 200 仅代表已接收，调用方需轮询索引状态（wait_document_indexed）。
     """
+    safe_filename = sanitize_dify_filename(filename)
     payload: dict[str, Any] = {
-        "name": filename,
+        "name": safe_filename,
         "doc_form": doc_form,
         "doc_language": "Chinese",
         "indexing_technique": "high_quality",
@@ -89,7 +103,7 @@ def create_by_file(
             response = client.post(
                 f"{_base_url()}/datasets/{dataset_id}/document/create_by_file",
                 headers=_headers(json=False),
-                files={"file": (filename, source)},
+                files={"file": (safe_filename, source)},
                 data={"data": json.dumps(payload, ensure_ascii=False)},
             )
             response.raise_for_status()
@@ -138,13 +152,13 @@ def resolve_local_file_node_id(dataset_id: str) -> str:
 
 def upload_pipeline_file(file_path: Path, filename: Optional[str] = None) -> dict[str, Any]:
     """Upload a local source file and return Dify's transient pipeline-file object."""
-    filename = filename or file_path.name
+    safe_filename = sanitize_dify_filename(filename or file_path.name)
     try:
         with file_path.open("rb") as source, httpx.Client(trust_env=False, timeout=120.0) as client:
             response = client.post(
                 f"{_base_url()}/datasets/pipeline/file-upload",
                 headers=_headers(json=False),
-                files={"file": (filename, source)},
+                files={"file": (safe_filename, source)},
             )
             response.raise_for_status()
             payload = response.json()
@@ -169,10 +183,11 @@ def run_pipeline(
     response is persisted intact because node-output keys differ by Dify version
     and Pipeline configuration.
     """
+    safe_filename = sanitize_dify_filename(filename)
     body = {
         "inputs": inputs or {},
         "datasource_type": "local_file",
-        "datasource_info_list": [{"reference": file_id, "name": filename}],
+        "datasource_info_list": [{"reference": file_id, "name": safe_filename}],
         "start_node_id": start_node_id,
         "is_published": True,
         "response_mode": "blocking",
@@ -251,9 +266,13 @@ def wait_pipeline_document_indexed(dataset_id: str, document_id: str) -> str:
             if response.status_code == 404:
                 raise DifyDocumentNotFound(f"Dify document not found: {document_id}")
             response.raise_for_status()
-            status = response.json().get("indexing_status")
-        if status in {"completed", "error"}:
-            return str(status)
+            doc_json = response.json()
+            status = doc_json.get("indexing_status")
+        if status == "completed":
+            return "completed"
+        if status == "error":
+            dify_err = doc_json.get("error") or doc_json.get("display_status") or "indexing error in Dify"
+            raise DifyPipelineError(f"Dify indexing error: {dify_err}")
         time.sleep(5)
     return "timeout"
 

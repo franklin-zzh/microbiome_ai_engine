@@ -188,8 +188,9 @@ def test_process_and_reply_human_mode(monkeypatch):
 # ---------- 回调入口：事件类回调只确认不推送 ----------
 
 
-def test_callback_event_enter_session_ignored_without_push():
-    """enter_session 等 MsgType=event 回调：回 success，不推送 NON_TEXT_REPLY、不进状态机
+def test_callback_other_event_ignored_without_push():
+    """非 enter_session 的 MsgType=event 回调（如 session_status_change）：回 success，
+    不推送、不进状态机
 
     官方结构：ToUserName=corpid，用户标识在 ExternalUserID，无 FromUserName 字段。
     """
@@ -197,7 +198,7 @@ def test_callback_event_enter_session_ignored_without_push():
         "<xml><ToUserName>wwd5f2644ae2a6a894</ToUserName>"
         "<CreateTime>1786694780</CreateTime>"
         "<MsgType>event</MsgType>"
-        "<Event>enter_session</Event>"
+        "<Event>session_status_change</Event>"
         "<Token>tok</Token>"
         "<OpenKfId>kfcb565b8d785380f0b</OpenKfId>"
         "<ExternalUserID>wm-xxx</ExternalUserID></xml>"
@@ -217,6 +218,78 @@ def test_callback_event_enter_session_ignored_without_push():
     assert resp.status_code == 200
     assert resp.body == b"success"
     send.assert_not_called()
+
+
+def test_callback_enter_session_pushes_welcome():
+    """enter_session（用户进入会话）：解析 WelcomeCode 并调度欢迎语推送任务（_push_welcome），不进入状态机"""
+    event_xml = (
+        "<xml><ToUserName>wwd5f2644ae2a6a894</ToUserName>"
+        "<CreateTime>1786694780</CreateTime>"
+        "<MsgType>event</MsgType>"
+        "<Event>enter_session</Event>"
+        "<Token>tok</Token>"
+        "<OpenKfId>kfcb565b8d785380f0b</OpenKfId>"
+        "<ExternalUserID>wm-xxx</ExternalUserID>"
+        "<WelcomeCode>code-abc</WelcomeCode></xml>"
+    )
+
+    class FakeCrypt:
+        def decrypt_msg(self, *args, **kwargs):
+            return event_xml
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"<xml><Encrypt>abc</Encrypt></xml>")
+    with patch("app.agent_cs.router.WXBizMsgCrypt", return_value=FakeCrypt()):
+        with patch("app.agent_cs.router.asyncio.create_task") as create_task:
+            resp = asyncio.run(
+                router.handle_wechat_message(request, "msg_signature", "timestamp", "nonce")
+            )
+    assert resp.status_code == 200
+    assert resp.body == b"success"
+    # 调度的是欢迎语推送任务（_push_welcome）：open_kf_id/touser/welcome_code 取自回调
+    create_task.assert_called_once()
+    task_coro = create_task.call_args.args[0]
+    assert inspect.iscoroutine(task_coro)
+    assert task_coro.cr_frame.f_locals["open_kf_id"] == "kfcb565b8d785380f0b"
+    assert task_coro.cr_frame.f_locals["touser"] == "wm-xxx"
+    assert task_coro.cr_frame.f_locals["welcome_code"] == "code-abc"
+
+
+def test_push_welcome_with_code_sends_msgmenu_on_event():
+    """欢迎语推送（有 welcome_code）：走企微事件响应接口 send_msg_on_event，单条 msgmenu 合并欢迎语+菜单，
+    不再降级普通 send_msg（企微规则下用户未发消息时 send_msg 必 95001）"""
+    with patch("app.agent_cs.router._try_push") as push, \
+            patch("app.agent_cs.router.wxkf_client.send_kf_menu") as menu, \
+            patch(
+                "app.agent_cs.router.wxkf_client.send_kf_welcome_menu_on_event",
+                return_value="msgid-1",
+            ) as welcome:
+        asyncio.run(router._push_welcome("kf-1", "wm-user", "code-xyz"))
+
+    welcome.assert_called_once()
+    assert welcome.call_args.args[0] == "code-xyz"
+    head = welcome.call_args.args[1]
+    assert "富玛特小助手" in head
+    assert "热门问题" in head
+    items = welcome.call_args.args[2]
+    assert len(items) == 5
+    assert [it["id"] for it in items] == ["q_fmt", "q_flow", "q_report", "q_service", "q_human"]
+    assert items[0]["content"] == "什么是粪菌移植（FMT）？适合哪些人群？"
+    # 不再降级普通 send_msg / send_kf_menu
+    push.assert_not_called()
+    menu.assert_not_called()
+
+
+def test_push_welcome_without_code_skips_push():
+    """欢迎语推送（无 welcome_code，如 48h 内重复进入会话）：直接跳过，不调任何发送接口"""
+    with patch("app.agent_cs.router._try_push") as push, \
+            patch("app.agent_cs.router.wxkf_client.send_kf_menu") as menu, \
+            patch("app.agent_cs.router.wxkf_client.send_kf_welcome_menu_on_event") as welcome:
+        asyncio.run(router._push_welcome("kf-1", "wm-user"))
+
+    push.assert_not_called()
+    menu.assert_not_called()
+    welcome.assert_not_called()
 
 
 def test_callback_kf_msg_received_text_enters_reply_chain():
@@ -315,7 +388,7 @@ def test_sync_and_collect_routes_text_and_dedups(monkeypatch):
         "errcode": 0, "next_cursor": "cur-1", "has_more": 0,
         "msg_list": [
             {"msgid": msgid, "open_kfid": "kf-sync", "external_userid": "wm-user",
-             "send_time": 1, "origin": 3, "msgtype": "text", "text": {"content": "你好"}},
+             "send_time": 1, "origin": 3, "msgtype": "text", "text": {"content": "报告怎么看"}},
             # origin=4 系统事件，应被忽略
             {"msgid": "evt-1", "open_kfid": "kf-sync", "external_userid": "",
              "send_time": 2, "origin": 4, "msgtype": "event",
@@ -329,24 +402,131 @@ def test_sync_and_collect_routes_text_and_dedups(monkeypatch):
                 patch("app.agent_cs.router._restore_state_from_db", return_value=None), \
                 patch("app.agent_cs.router._lazy_cleanup_expired"), \
                 patch("app.agent_cs.router._persist_route_state") as persist, \
-                patch("app.agent_cs.router.sm.route_incoming", return_value=route_ret) as route:
-            to_reply = router._sync_and_collect("kf-sync", "tok")
+                patch("app.agent_cs.router.sm.route_incoming", return_value=route_ret) as route, \
+                patch("app.agent_cs.router._try_push") as push:
+            to_reply, to_welcome = router._sync_and_collect("kf-sync", "tok")
 
         assert len(to_reply) == 1
-        assert to_reply[0]["user_message"] == "你好"
+        assert to_reply[0]["user_message"] == "报告怎么看"
         assert to_reply[0]["open_id"] == "wm-user"
         assert to_reply[0]["open_kf_id"] == "kf-sync"
         route.assert_called_once()
         persist.assert_called_once()
+        # 即时 ack：Dify 思考期间先推「收到」给用户
+        push.assert_called_once()
+        assert push.call_args.args[0] == "kf-sync"
+        assert push.call_args.args[1] == "wm-user"
+        assert "收到" in push.call_args.args[2]
 
         # 第二次拉同一批：msgid 已去重，不再分流
         with patch("app.agent_cs.router.wxkf_client.sync_msg", return_value=sync_resp), \
                 patch("app.agent_cs.router._restore_state_from_db", return_value=None), \
                 patch("app.agent_cs.router._lazy_cleanup_expired"), \
                 patch("app.agent_cs.router._persist_route_state") as persist2, \
-                patch("app.agent_cs.router.sm.route_incoming", return_value=route_ret) as route2:
-            to_reply2 = router._sync_and_collect("kf-sync", "tok")
+                patch("app.agent_cs.router.sm.route_incoming", return_value=route_ret) as route2, \
+                patch("app.agent_cs.router._try_push") as push2:
+            to_reply2, to_welcome2 = router._sync_and_collect("kf-sync", "tok")
         assert to_reply2 == []
+        assert to_welcome2 == []
         route2.assert_not_called()
+        push2.assert_not_called()
     finally:
         redis.delete(cursor_key, dedup_key)
+
+
+def test_process_and_reply_greeting_fast_path(monkeypatch):
+    """纯日常问候（你好/在吗/hi）走 Fast-Path：直接下发欢迎语+快捷菜单，0 LLM 且不调用 Dify"""
+    monkeypatch.setattr("app.agent_cs.router.get_db", _test_db_gen)
+    session_id = f"test-greeting-{uuid.uuid4()}"
+    with patch("app.agent_cs.router._try_push") as push_mock, \
+            patch("app.agent_cs.router.dify_chat_client.chat_messages") as dify_call:
+        router._process_and_reply(
+            session_id=session_id,
+            open_id="open-greet",
+            open_kf_id="kf-greet",
+            user_message="你好呀",
+            state=sm.STATE_NORMAL,
+            hit_keyword=None,
+        )
+        # 极速秒回：发送菜单与欢迎语，不调用 Dify
+        push_mock.assert_called_once()
+        assert push_mock.call_args.args[0] == "kf-greet"
+        assert push_mock.call_args.args[1] == "open-greet"
+        assert "富玛特小助手" in push_mock.call_args.args[2]
+        assert "【核心技术】什么是粪菌移植（FMT）？" in push_mock.call_args.args[2]
+        dify_call.assert_not_called()
+
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT ai_reply, meta FROM cs_chat_logs WHERE session_id=:s"),
+            {"s": session_id},
+        ).mappings().first()
+    assert row is not None
+    assert "富玛特" in row["ai_reply"]
+    assert "greeting_fast_path" in str(row["meta"])
+    _cleanup(session_id)
+
+
+def test_is_pure_greeting_and_menu_recognition():
+    """验证问候语与菜单识别函数"""
+    assert sm.is_pure_greeting("你好") is True
+    assert sm.is_pure_greeting("您好！") is True
+    assert sm.is_pure_greeting("hi") is True
+    assert sm.is_pure_greeting("在吗？") is True
+    assert sm.is_pure_greeting("早上好~") is True
+    # 含有具体问题的长句不是纯问候
+    assert sm.is_pure_greeting("你好，请问fmt适合什么年龄段？") is False
+    assert sm.is_pure_greeting("报告怎么看") is False
+
+    assert sm.is_menu_request("菜单") is True
+    assert sm.is_menu_request("常见问题") is True
+    assert sm.is_menu_request("menu") is True
+    assert sm.is_menu_request("帮助") is True
+    assert sm.is_menu_request("什么是肠菌移植") is False
+
+
+
+def test_sync_and_collect_collects_enter_session():
+    """sync_msg 拉取到 enter_session 事件时，应收集到 to_welcome 并记录日志"""
+    redis = get_redis()
+    msgid = f"sync-enter-{uuid.uuid4()}"
+    cursor_key = "wxkf:sync_cursor:kf-welcome"
+    dedup_key = f"wxkf:synced_msgid:{msgid}"
+    redis.delete(cursor_key, dedup_key)
+
+    sync_resp = {
+        "errcode": 0, "next_cursor": "cur-w", "has_more": 0,
+        "msg_list": [
+            {
+                "msgid": msgid,
+                "open_kfid": "kf-welcome",
+                "external_userid": "wm-new-user",
+                "send_time": 100,
+                "origin": 4,
+                "msgtype": "event",
+                "event": {
+                    "event_type": "enter_session",
+                    "open_kfid": "kf-welcome",
+                    "external_userid": "wm-new-user",
+                    "welcome_code": "code-123",
+                },
+            },
+        ],
+    }
+
+    try:
+        with patch("app.agent_cs.router.wxkf_client.sync_msg", return_value=sync_resp):
+            to_reply, to_welcome = router._sync_and_collect("kf-welcome", "tok")
+
+        assert len(to_reply) == 0
+        assert len(to_welcome) == 1
+        assert to_welcome[0]["open_kf_id"] == "kf-welcome"
+        assert to_welcome[0]["touser"] == "wm-new-user"
+
+        # 再次拉取已去重
+        with patch("app.agent_cs.router.wxkf_client.sync_msg", return_value=sync_resp):
+            to_reply2, to_welcome2 = router._sync_and_collect("kf-welcome", "tok")
+        assert len(to_welcome2) == 0
+    finally:
+        redis.delete(cursor_key, dedup_key)
+

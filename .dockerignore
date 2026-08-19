@@ -1,0 +1,53 @@
+# ==============================================================================
+# Docker 根目录打包忽略清单 (.dockerignore)
+# ==============================================================================
+
+# Git 与版本控制
+.git/
+.gitignore
+.gitattributes
+
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# 测试与临时分析目录
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# 编辑器与助手配置
+.vscode/
+.idea/
+.agent/
+.reasonix/
+.DS_Store
+Thumbs.db
+
+# 密钥与本地配置
+.env
+.env.*
+!.env.example
+
+# 非后端目录（避免打包入后端镜像）
+crawler/
+dify/
+docs/
+etl/
+frp-client/
+docker/
+
+# 归档与中间文件
+*.tar
+*.zip
+*.gz
+*.log
+deploy/*.tar
