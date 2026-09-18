@@ -263,7 +263,7 @@ class UnansweredQuestion(Base):
     user_query = Column(Text, nullable=False)
     normalized_query = Column(Text)
     context = Column(JSON)
-    match_score = Column(String(10))  # 保留小数位文本，避免精度问题
+    match_score = Column(String(32))  # 保留小数位文本，避免精度问题
     status = Column(Enum(UnansweredStatus, name="unanswered_status"), nullable=False, default=UnansweredStatus.OPEN)
 
     created_at = Column(DateTime, server_default=func.now())

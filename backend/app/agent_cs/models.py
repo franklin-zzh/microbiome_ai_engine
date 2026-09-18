@@ -40,6 +40,8 @@ class CsChatLog(Base):
     channel = Column(Enum(ChatChannel, name="chat_channel"), nullable=False)
     session_id = Column(String(128), nullable=False, index=True)
     open_id = Column(String(128), nullable=False, index=True)
+    chat_type = Column(String(32), index=True, nullable=True)   # single (1v1单聊) / group (群聊) / wxkf (微信客服)
+    chat_id = Column(String(128), index=True, nullable=True)     # 企微内部/外部群聊 ID
 
     user_message = Column(Text, nullable=False)
     ai_reply = Column(Text)

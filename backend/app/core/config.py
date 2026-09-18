@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     wecom_sales_token: str = ""
     wecom_sales_encoding_aes_key: str = ""
     dify_sales_chat_api_key: str = ""
+    # 商务与战略招商（面向企业群/投资/赞助/合伙人）专属 Dify API Key
+    dify_partner_chat_api_key: str = ""
+
+    # 企业微信智能机器人（API 模式 / WebSocket 长连接）
+    wecom_aibot_enabled: bool = False
+    wecom_aibot_id: str = ""
+    wecom_aibot_secret: str = ""
+    wecom_aibot_ws_url: str = "wss://openws.work.weixin.qq.com"
 
     # ============ 安全基线（P0，全部必填）============
     # JWT 签发密钥：生成方式 python -c "import secrets; print(secrets.token_urlsafe(48))"

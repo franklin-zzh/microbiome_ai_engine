@@ -12,4 +12,5 @@
 | `wxkf-runbook.md` | 微信客服接入联调手册：链路架构、企微后台配置、frp 预检、三态（NORMAL/BLOCKED/HUMAN_MODE）端到端验证、故障排查表、收尾核对清单 |
 | `DIFY-API-CONTRACT.md` | Dify Service API 契约（1.16.1 冻结版）：端点总览、create_by_text payload、异步索引行为、删除限制、待实测回填 |
 | `ETL-NOTES.md` | 本地 ETL 清洗实测记录：各格式清洗效果矩阵、图片文字提取方案、7 条避坑清单、图片处理策略、入库 SOP |
+| `WECOM-AIBOT-GUIDE.md` | 企业微信智能机器人接入指南：WebSocket（OpenWS）长连接协议、Dify 打字机流式输出、群聊/私聊双场景隔离、商机拦截与待办去重设计 |
 | `smoke-seed/` | 冒烟种子素材：`cs_general_肠道菌群检测流程.md`（General 库干净 md）、`cs_qa_faq_种子.txt`（Q&A 库 FAQ 问答对） |

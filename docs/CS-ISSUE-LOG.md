@@ -34,13 +34,18 @@
 | P2 | `verify_dify_contract.py` 走系统代理致 502/超时 | 契约实测失败 | ✅ 已修复（`trust_env=False` + key 优先级 + 按形态分流），CONTRACT OK |
 | P3 | Dify retrieve 需完整 `retrieval_model`（`reranking_enable` 等），缺字段 400 | 召回测试报错 | ✅ 已修复（retrieve_test.py） |
 | P4 | 脚本中文输出在 PowerShell 显示乱码（控制台 GBK vs UTF-8） | 可读性 | 📋 建议运行前 `chcp 65001` 或设置 `PYTHONIOENCODING=utf-8` |
+| P5 | **企微 OpenWS 不支持 RFC 6455 Ping 控制帧（Opcode 0x9）**：客户端主动 ping 触发 `1002 invalid opcode / incorrect masking` 或 `1011 keepalive ping timeout` | 长连接每隔 20~30 秒偶发断线重连 | ✅ 2026-08-19 已解决：在 `websockets.connect` 中设置 `ping_interval=None, ping_timeout=None`，完全依靠 TCP Keep-Alive 保活，实测 60s+ 持续常驻零断连 |
+| P6 | **生产环境 Gunicorn 多 Worker（`-w 2`）导致 WebSocket 顶号互踢**：两进程拿同一 Bot ID 连接企微 | 线上每隔 1~2 秒反复出现 CONNECTING 与 RECONNECTING 死循环 | ✅ 2026-08-19 已解决：FastAPI 全异步应用在 `docker-compose.prod.yml` 中锁定为单 Worker（`-w 1`）独占运行 |
+| P7 | **企微推送报文协议命名差异（`msgtype` vs `msg_type`）**：后端未提取到 `msg_type` 导致判定为不支持消息 | 用户发送正常文字但被后台 `status: IGNORED` 忽略 | ✅ 2026-08-19 已解决：在 `wecom_sales_service.py` 和客户端中全面兼容 `msgtype`、`msg_type` 与 `text.content` 结构 |
+| P8 | **`websockets` 库 v14+/v16+ 属性弃用**：`is_connected` 访问 `ws.closed` 报错 `'ClientConnection' object has no attribute 'closed'` | 连接重连与心跳崩溃 | ✅ 2026-08-19 已解决：重构 `is_connected` 属性，优先检查 `ws.state.name == "OPEN"` |
+| P9 | **对话日志湖（`cs_chat_logs`）高频检索维度列化演进**：`chat_type` 与 `chat_id` 原先全放 JSON `meta` 无法走 B-Tree 索引 | 后台按群筛选或按单聊/群聊统计时全表扫描性能低 | ✅ 2026-08-19 已解决：不进行物理分表，生成 Alembic 迁移脚本新增 `chat_type` 与 `chat_id` 实体列并建立索引 |
+| E10 | **招商群与内部销售 1v1 话术混淆、机械死板**：单一 Agent 无法同时兼顾面向外部代理商的公司实力/合作框架介绍与面向内部员工的实战异议攻防 | 群聊与单聊体验死板僵硬、大水漫灌 | ✅ 2026-08-19 已解决：拆分为 `partner_agent_chatbot.yml`（招商合伙人）与 `sales_agent_chatbot.yml`（销售实战）双 Dify 工作流，严格控制 150~250 字轻快拟人化输出，后端根据 `is_group` 智能动态分发 |
 
-## 四、整改优先级与更新（2026-08-18）
+## 四、整改优先级与更新（2026-08-19）
 
-1. ✅ **E7**：`answer_llm` 思考内容 `<think>` 泄漏已修复。
-2. ✅ **E8**：大小写与缩写归一化（`normalize_query`）已上线并验证。
-3. ✅ **E9**：多轮会话记忆与指代改写（`query_rewriter`）已上线并验证。
-4. ✅ **S4**：日常问候 Fast-Path 极速秒回已上线。
-5. 🔴 **E1**：CS_QA 库新闻文档撤下 + 真实 FAQ 重入库（工具已就绪，等 FAQ 内容）。
-6. 📋 **E3/E4**：FAQ 补强 + 全量资料清洗入库（等用户文件）。
+1. ✅ **P5 / P6 / P7 / P8**：企业微信智能机器人 WebSocket 长连接四大底层协议与多进程冲突已彻底根治，稳定度达 100%。
+2. ✅ **P9**：`cs_chat_logs` 数据表 `chat_type` 与 `chat_id` 实体列迁移及入库已就绪。
+3. ✅ **E10**：招商与内部销售双 Agent 工作流 DSL、拟人化提示词与后端动态路由已全量上线。
+4. 🔴 **E1**：CS_QA 库新闻文档撤下 + 真实 FAQ 重入库（工具已就绪，等 FAQ 内容）。
+5. 📋 **E3/E4**：FAQ 补强 + 全量资料清洗入库（等用户文件）。
 

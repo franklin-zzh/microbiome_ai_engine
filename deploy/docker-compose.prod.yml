@@ -43,10 +43,10 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
 
-    # 启动命令：先执行数据库版本迁移，再拉起 Gunicorn 多进程服务
+    # 启动命令：先执行数据库版本迁移，拉起单 Worker 异步网关（长连接严格单实例独占）
     command: >
       sh -c "alembic upgrade head && 
-             gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:13006 --max-requests 1000 --max-requests-jitter 100 --access-logfile - --error-logfile -"
+             gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:13006 --access-logfile - --error-logfile -"
 
     # 接入既有的内部容器网络 fmtsw-net
     networks:

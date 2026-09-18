@@ -9,8 +9,10 @@ from app.agent_cs import models as cs_models  # noqa: F401  注册 CsChatLog / S
 from app.agent_cs.router import chat_router, wechat_router
 from app.agent_sales import models as sales_models  # noqa: F401  注册 LeadsPreview 到 Base
 from app.agent_sales.router import router as sales_router
+from app.clients.wx.wecom_aibot_client import get_wecom_aibot_client
 from app.core.auth_router import router as auth_router
 from app.core.config import get_settings
+from app.core.logging import structured_log
 from app.core.redis import redis_health
 from app.knowledge import models as knowledge_models  # noqa: F401  注册 core_* 表（CS 文档五表等）到 Base
 from app.knowledge.router import admin_router, cs_router, router as knowledge_router
@@ -21,7 +23,17 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 表结构统一由 Alembic 迁移管理（alembic upgrade head），不再使用 create_all
+    aibot_client = None
+    if settings.wecom_aibot_enabled:
+        aibot_client = get_wecom_aibot_client()
+        await aibot_client.start()
+        structured_log(event="main_aibot_worker_initiated", status="STARTED")
+
     yield
+
+    if aibot_client:
+        await aibot_client.stop()
+        structured_log(event="main_aibot_worker_stopped", status="STOPPED")
 
 
 def create_app() -> FastAPI:

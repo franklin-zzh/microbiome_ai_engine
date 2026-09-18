@@ -149,10 +149,15 @@ async def handle_sales_wecom_message(
         plain_xml = crypt.decrypt_msg(msg_signature, timestamp, nonce, encrypt)
         msg_root = ET.fromstring(plain_xml)
         msg_type = msg_root.findtext("MsgType") or ""
+        event = msg_root.findtext("Event") or ""
         from_user = msg_root.findtext("FromUserName") or ""
         content = msg_root.findtext("Content") or ""
         chat_id = msg_root.findtext("ChatId") or ""
         msg_id = msg_root.findtext("MsgId") or ""
+        token = msg_root.findtext("Token") or ""
+        open_kf_id = msg_root.findtext("OpenKfId") or ""
+        welcome_code = msg_root.findtext("WelcomeCode") or ""
+        external_userid = msg_root.findtext("ExternalUserID") or ""
     except Exception as exc:
         structured_log(
             event="wecom_sales_msg_decrypt_failed",
@@ -165,13 +170,32 @@ async def handle_sales_wecom_message(
         event="wecom_sales_msg_received",
         status="RECEIVED",
         extra={
-            "from_user": from_user,
+            "from_user": from_user or external_userid,
             "chat_id": chat_id,
             "msg_type": msg_type,
+            "event": event,
             "msg_id": msg_id,
             "content_len": len(content),
         },
     )
+
+    # 微信客服事件兼容兜底：若误将微信客服 API 指向了此路由，自动桥接至微信客服拉取与回复链路
+    if event == "kf_msg_or_event":
+        from app.agent_cs.router import _sync_and_reply_async
+        structured_log(
+            event="wecom_sales_bridge_to_wxkf",
+            status="BRIDGED",
+            extra={"open_kfid": open_kf_id, "has_token": bool(token)},
+        )
+        asyncio.create_task(_sync_and_reply_async(open_kf_id, token))
+        return Response(content="success", media_type="text/plain")
+
+    if event == "enter_session":
+        from app.agent_cs.router import _push_welcome
+        target_user = external_userid or from_user
+        if target_user:
+            asyncio.create_task(_push_welcome(open_kf_id, target_user, welcome_code))
+        return Response(content="success", media_type="text/plain")
 
     # 仅处理文本消息
     if msg_type == "text" and content:

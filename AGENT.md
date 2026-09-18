@@ -71,7 +71,13 @@ H5 官网聊天窗  ─┘        │                                           
     - **默认凭据拒绝**：`DATABASE_URL / REDIS_URL / JWT_SECRET / ADMIN_USERNAME / ADMIN_PASSWORD / INTERNAL_API_KEY` 缺失即启动失败（`app/core/config.py` 必填校验），compose 一律 `${VAR:?}` 不留默认兜底；
     - **三层鉴权**：① 人类用户 → JWT（`/api/v1/auth/login`，`app/core/security.py` 的 `require_admin`）；② Dify workflow 回调/内部异步链路 → Header `X-API-Key`（`INTERNAL_API_KEY`，`require_internal_key`）；③ 微信 Webhook → 官方签名验签（WXBizMsgCrypt，POST 回调已验签+解密）；
     - **CORS 白名单配置注入**（`CORS_ORIGINS` 逗号分隔），禁止 `allow_origins=["*"]`；
-    - frp 客户端真实配置（含 token）gitignore，仓库只留 `frp-client/frpc.toml.example` 模板。
+    - frp 客户端真实配置（含 token）gitignore，仓库只留 `frp-client/frpc.toml.example` 模板；
+    - 🚨 **环境变量全量同步原则（强制执行，严禁遗漏）**：每次新增、修改或删除任何环境变量配置项时，**必须同时、强制同步更新全库所有 `.env*` 模板与配置文件**：
+      1. 根目录 `.env.example`（基础模板）
+      2. 根目录 `.env`（本地运行配置）
+      3. `backend/.env.example`（后端子目录模板）
+      4. `deploy/.env.prod.example`（生产环境部署模板）
+      严禁仅更新某一个文件而导致其他环境配置脱节！
 
 5. **轻量与高扩展设计**：遵循 MVP 最小可行原则，避免过度设计（例如不引入 Milvus 集群、第一周不引入 Celery）。接口 RESTful，核心业务逻辑在 Service 层消化。
 
@@ -162,9 +168,14 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
 > 2. 严禁偷懒合并时间！【最近一次同步时间】必须精确到分钟，格式严格锁定为：`YYYY-MM-DD HH:mm`。
 > 3. 每次更新时，必须同步清理已完成的 Todo，并将下一步最硬核的技术焦点写在【当前关注的架构焦点】中。
 
-- **最近一次同步时间**：2026-08-14 15:25
+- **最近一次同步时间**：2026-08-19 16:50
 
-- **当前关注的架构焦点**：微信客服接入联调收尾（2026-08-14）——① 代码全就绪：回调验签解密（`/wx/msg` GET 校验 + POST 消息）→ Redis 状态机（NORMAL/BLOCKED/HUMAN_MODE）→ 关键词网关拦截（0 LLM）→ `dify_chat_client` 调 Dify → `wxkf_client` 企微主动推送 → `cs_chat_logs` 落库，pytest 16/16；② `.env` 企微四键已填、frp token 已与服务器 frps.toml 同步（待办 #6 完成，`https://wx.fmtcloud.cn` 已验证可达本地 backend）；③ E7（answer_llm `<think>` 泄漏）已在 Dify 控制台修复；④ 接入联调手册已沉淀：`docs/wxkf-runbook.md`（链路架构/企微后台配置 6 步/三态端到端验证/10 条故障排查/核对清单）。下一步：企微后台配回调 URL + 创建客服账号 → 三态实测（真实微信消息），完成后勾待办 #8。
+- **当前关注的架构焦点**：企微智能机器人生态准入、长连接底层协议避坑与 Dify 双工作流分发（2026-08-19）
+    - ① **企微群聊准入机制**：企微群聊（内部群、外部招商群）`@机器人` 必须在企微后台创建「智能机器人（API 模式）」，获取 Bot ID/Secret 建立 WebSocket 长连接；自建应用（Custom App）无法直接进群作为聊天机器人。
+    - ② **Dify 双 Agent 工作流解耦与动态分流**：创建招商专属工作流 `dify/workflows/partner_agent_chatbot.yml`（`DIFY_PARTNER_CHAT_API_KEY`，面向企业群/代理商/投资合作，重点输出公司背景、公众号矩阵、CFU 活菌量、严苛供体筛选与合同模板）与一线销售实战副驾驶 `dify/workflows/sales_agent_chatbot.yml`（`DIFY_SALES_CHAT_API_KEY`，面向员工 1v1 异议攻防，解答比普通益生菌贵的原因与拜访实战话术），后端 `wecom_sales_service.py` 按 `is_group` 自动动态路由。
+    - ③ **OpenWS WebSocket 协议级避坑**：企微云端长连接网关（`openws.work.weixin.qq.com`）不识别 WebSocket RFC 6455 Ping 控制帧（Opcode 0x9），在 `websockets.connect` 中设置 `ping_interval=None, ping_timeout=None` 依靠 TCP Keep-Alive 保活，彻底根治 1002 invalid opcode 与 1011 ping timeout 周期性断连（实测 60s+ 持续常驻零断连）。
+    - ④ **生产环境单 Worker 独占模式**：在 `docker-compose.prod.yml` 中锁定 Gunicorn 为单 Worker（`-w 1`），彻底根治多 Worker 争抢同一个 Bot ID 导致的顶号互踢死循环。
+    - ⑤ **报文协议兼容与数据湖列化**：报文全面兼容 `msgtype` 与 `msg_type`；`cs_chat_logs` 数据表通过 Alembic 迁移（`f3a4b5c6d7e8`）新增 `chat_type` 与 `chat_id` 实体索引字段，兼顾单表全局数据湖分析与毫秒级索引过滤。全库 4 份 `.env*` 文件严格同步，pytest 74/74 通过。
 
 - **待办遗留事项 (Todo)**：
     - [x] 1. 方案评审：`cs_chat_logs` / `session_state` / `leads_preview` 三表 DDL 设计（含索引、channel 维度），后合并为单库 `mb_ai_engine`（core_*/cs_* 前缀）。
@@ -184,3 +195,6 @@ D:\projects\microbiome_ai_engine\    # 项目根目录（2026-08-03 由 gut-heal
     - [ ] 15. 发布后接口测试（S1）：Dify 控制台发布 cs_agent_chatbot → API 访问创建 app- 前缀 key → 填 .env DIFY_APP_API_KEY → 跑 `backend/scripts/smoke_chat.py` 回填速度基线（首 token 延迟/全链路耗时/token 消耗）。
     - [ ] 16. 全量清洗入库（E4）：用户把公司资料（PPT/PDF/公众号文章/说明书）放入 `etl/raw/` → `etl\.venv\Scripts\python.exe -m etl etl\raw -o etl\out` → `import_etl_md.py --md-dir ..\etl\out` 批量入库 cs_general。
     - [ ] 17. 召回/阈值调优（E2/E3）：观察 rerank 分数分布，试点 rerank score_threshold 0.3→0.5；「报告查询/停药」等弱命中问题进 FAQ 补强清单后复测。
+    - [x] 18. 企业微信智能机器人长连接（OpenWS）+ Dify 双工作流流式打字机对接（2026-08-19 落地）：实现 `wecom_aibot_client.py` + `handle_aibot_message_stream`，彻底根治 RFC Ping 与双 Worker 互踢，支持群聊/私聊双场景隔离与商机拦截。
+    - [ ] 19. 消息防重机制（微信/企微长连接去重）：基于 Redis SETNX (`wx:dedup:msg:{msg_id}` TTL=60s + `wx:dedup:hash:{user_id}:{md5}` TTL=5s) 防止网络重试或短时间高频连击导致重复调用 Dify 算力。
+

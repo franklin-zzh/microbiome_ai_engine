@@ -87,3 +87,76 @@ def chat_messages(
         # 知识库召回资源（若有），供对话日志湖记录检索来源
         "retrieval_resources": (data.get("metadata") or {}).get("retrieval_resources") or [],
     }
+
+
+async def stream_chat_messages(
+    query: str,
+    user: str,
+    conversation_id: Optional[str] = None,
+    inputs: Optional[Dict[str, Any]] = None,
+    timeout: Optional[int] = None,
+    api_key: Optional[str] = None,
+):
+    """异步流式调用 Dify ``chat-messages``（response_mode="streaming"），yield SSE 解析结果。
+
+    Yield 结构：
+    - chunk 增量片段: {"event": "message", "delta": str, "conversation_id": str, "message_id": str}
+    - 结束帧: {"event": "message_end", "conversation_id": str, "message_id": str, "retrieval_resources": list}
+    """
+    import json
+    settings = _settings()
+    body = {
+        "inputs": inputs or {},
+        "query": query,
+        "response_mode": "streaming",
+        "user": user,
+    }
+    if conversation_id:
+        body["conversation_id"] = conversation_id
+
+    headers = {"Authorization": f"Bearer {_api_key(api_key)}"}
+    url = f"{_base_url()}/chat-messages"
+
+    async with httpx.AsyncClient(
+        timeout=timeout or settings.dify_chat_timeout_seconds,
+        trust_env=False,
+    ) as client:
+        try:
+            async with client.stream("POST", url, headers=headers, json=body) as resp:
+                if resp.status_code != 200:
+                    error_text = await resp.aread()
+                    raise DifyChatError(f"dify stream returned {resp.status_code}: {error_text[:200].decode('utf-8', errors='ignore')}")
+
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if not data_str:
+                        continue
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event = data.get("event")
+                    if event == "message":
+                        yield {
+                            "event": "message",
+                            "delta": data.get("answer", ""),
+                            "conversation_id": data.get("conversation_id"),
+                            "message_id": data.get("message_id"),
+                        }
+                    elif event == "message_end":
+                        yield {
+                            "event": "message_end",
+                            "conversation_id": data.get("conversation_id"),
+                            "message_id": data.get("message_id"),
+                            "retrieval_resources": (data.get("metadata") or {}).get("retrieval_resources") or [],
+                        }
+                    elif event == "error":
+                        raise DifyChatError(f"dify stream error: {data.get('message') or data}")
+        except httpx.HTTPError as exc:
+            raise DifyChatError(f"dify stream request failed: {type(exc).__name__}") from exc

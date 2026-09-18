@@ -1,0 +1,871 @@
+app:
+  description: '富玛特（FMT）智能招商与销售赋能专属 Agent：
+    
+    挂载招商案例库 + 核心产品技术长文档双知识库；
+    
+    支持产品技术参数解答、供体筛选标准、代理合作赋能、销售异议攻防话术生成；
+    
+    具备 B 端合规宣传护栏与敏感价格商机转接，多轮上下文检索改写 + Rerank 混合检索。'
+  icon: 💼
+  icon_background: '#FEF3C7'
+  icon_type: emoji
+  mode: advanced-chat
+  name: 招商销售赋能助手
+  use_icon_as_answer_icon: false
+dependencies:
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/deepseek:0.0.19@1aa3c64e2f50179afe8410ad79412dab92bf5919a27da8e2b13071b5e5f8ce81
+    version: null
+- current_identifier: null
+  type: marketplace
+  value:
+    marketplace_plugin_unique_identifier: langgenius/siliconflow:0.0.59@8f02741bb210eac68b68263c1cbede0e0637f2d1ad082895906e03253461729c
+    version: null
+kind: app
+version: 0.7.0
+workflow:
+  conversation_variables: []
+  environment_variables:
+  - description: 后端服务地址（Dify 容器内访问宿主机用 host.docker.internal；服务器部署按实际可达地址改）
+    id: 33333333-3333-3333-3333-333333333333
+    name: BACKEND_BASE_URL
+    selector:
+    - env
+    - BACKEND_BASE_URL
+    value: https://wx.fmtcloud.cn
+    value_type: string
+  - description: 回调共享密钥，与 backend .env INTERNAL_API_KEY 保持一致
+    id: 44444444-4444-4444-4444-444444444444
+    name: INTERNAL_API_KEY
+    selector:
+    - env
+    - INTERNAL_API_KEY
+    value: ''
+    value_type: secret
+  features:
+    file_upload:
+      allowed_file_extensions:
+      - .JPG
+      - .JPEG
+      - .PNG
+      - .GIF
+      - .WEBP
+      - .SVG
+      allowed_file_types:
+      - image
+      allowed_file_upload_methods:
+      - local_file
+      - remote_url
+      enabled: false
+      fileUploadConfig:
+        attachment_image_file_size_limit: 2
+        audio_file_size_limit: 50
+        batch_count_limit: 5
+        file_size_limit: 15
+        file_upload_limit: 20
+        image_file_batch_limit: 10
+        image_file_size_limit: 10
+        single_chunk_attachment_limit: 10
+        video_file_size_limit: 100
+        workflow_file_upload_limit: 10
+      image:
+        enabled: false
+        number_limits: 3
+        transfer_methods:
+        - local_file
+        - remote_url
+      number_limits: 3
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: start
+        targetType: code
+      id: e-start-normalize_query
+      selected: false
+      source: start
+      sourceHandle: source
+      target: normalize_query
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: llm
+      id: e-normalize_query-query_rewriter
+      selected: false
+      source: normalize_query
+      sourceHandle: source
+      target: query_rewriter
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: llm
+        targetType: code
+      id: e-query_rewriter-extract_query
+      selected: false
+      source: query_rewriter
+      sourceHandle: source
+      target: extract_query
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: knowledge-retrieval
+      id: e-extract_query-kr_qa
+      selected: false
+      source: extract_query
+      sourceHandle: source
+      target: knowledge_retrieval_qa
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: knowledge-retrieval
+      id: e-extract_query-kr_doc
+      selected: false
+      source: extract_query
+      sourceHandle: source
+      target: knowledge_retrieval_doc
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: knowledge-retrieval
+        targetType: code
+      id: e-kr_qa-merge
+      selected: false
+      source: knowledge_retrieval_qa
+      sourceHandle: source
+      target: merge_docs
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: knowledge-retrieval
+        targetType: code
+      id: e-kr_doc-merge
+      selected: false
+      source: knowledge_retrieval_doc
+      sourceHandle: source
+      target: merge_docs
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: if-else
+      id: e-merge-score_branch
+      selected: false
+      source: merge_docs
+      sourceHandle: source
+      target: score_branch
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: llm
+      id: e-score_branch-true-answer_llm
+      selected: false
+      source: score_branch
+      sourceHandle: 'true'
+      target: answer_llm
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: if-else
+        targetType: template-transform
+      id: e-score_branch-false-fallback_handoff
+      selected: false
+      source: score_branch
+      sourceHandle: 'false'
+      target: fallback_handoff
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: llm
+        targetType: code
+      id: e-answer_llm-strip_think
+      selected: false
+      source: answer_llm
+      sourceHandle: source
+      target: strip_think
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: code
+        targetType: answer
+      id: e-strip_think-answer_main
+      selected: false
+      source: strip_think
+      sourceHandle: source
+      target: answer_main
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: template-transform
+        targetType: http-request
+      id: e-fallback_handoff-fallback_callback
+      selected: false
+      source: fallback_handoff
+      sourceHandle: source
+      target: fallback_callback
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    - data:
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        sourceType: http-request
+        targetType: answer
+      id: e-fallback_callback-answer_fallback
+      selected: false
+      source: fallback_callback
+      sourceHandle: source
+      target: answer_fallback
+      targetHandle: target
+      type: custom
+      zIndex: 0
+    nodes:
+    - data:
+        desc: ''
+        selected: false
+        title: 开始
+        type: start
+        variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 73
+      id: start
+      position:
+        x: 100
+        y: 400
+      positionAbsolute:
+        x: 100
+        y: 400
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        title: 招商术语归一化
+        desc: 专有名词大小写归一化、商业简称与医学技术术语扩展
+        type: code
+        code_language: python3
+        code: "def main(query: str = \"\") -> dict:\n    import re\n    q = query.strip() if query else \"\"\n    synonym_map = {\n        \"fmt\": \"FMT 肠道菌群移植\",\n        \"asd\": \"ASD 孤独症自闭症\",\n        \"ibd\": \"IBD 炎症性肠病\",\n        \"sibo\": \"SIBO 小肠细菌过度生长\",\n        \"ibs\": \"IBS 肠易激综合征\",\n        \"cfu\": \"CFU 活菌数\",\n        \"活菌量\": \"活菌数量与活性指标\",\n        \"供体\": \"供体筛选与严苛质控标准\",\n        \"代理\": \"招商代理与合作政策\",\n        \"加盟\": \"招商加盟与合作模式\",\n        \"底价\": \"合作政策与价格体系\",\n        \"独家\": \"区域独家代理政策\",\n        \"资质\": \"企业资质与医疗器械认证\",\n    }\n    sorted_keys = sorted(synonym_map.keys(), key=len, reverse=True)\n    patterns = []\n    for k in sorted_keys:\n        if k.isascii():\n            patterns.append(rf\"(?<![a-zA-Z]){re.escape(k)}(?![a-zA-Z])\")\n        else:\n            patterns.append(re.escape(k))\n    combined_pattern = re.compile(\"|\".join(patterns), flags=re.IGNORECASE)\n    \n    def _repl(match):\n        matched_text = match.group(0).lower()\n        return synonym_map.get(matched_text, match.group(0))\n    \n    norm_q = combined_pattern.sub(_repl, q)\n    return {\"normalized_query\": norm_q, \"original_query\": q}"
+        outputs:
+          normalized_query:
+            type: string
+            children: null
+          original_query:
+            type: string
+            children: null
+        selected: false
+        variables:
+        - value_selector:
+          - sys
+          - query
+          value_type: string
+          variable: query
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 72
+      id: normalize_query
+      position:
+        x: 420
+        y: 400
+      positionAbsolute:
+        x: 420
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        title: 多轮指代与意图改写
+        desc: 结合销售沟通历史与上下文进行指代消解，生成独立完整的技术/招商检索 Query
+        type: llm
+        version: '1'
+        context:
+          enabled: false
+          variable_selector: []
+        vision:
+          enabled: false
+        structured_output_enabled: false
+        memory:
+          query_prompt_template: '{{#sys.query#}}'
+          role_prefix:
+            assistant: ''
+            user: ''
+          window:
+            enabled: true
+            size: 10
+        model:
+          provider: langgenius/deepseek/deepseek
+          name: deepseek-v4-flash
+          mode: chat
+          completion_params:
+            max_tokens: 256
+            temperature: 0.0
+            thinking: false
+        prompt_template:
+        - edition_type: basic
+          id: prompt-sales-rewriter
+          role: system
+          text: '# Role
+            你是一个专业的招商与销售检索查询改写助手。你的任务是根据代理商或业务员的最新输入以及多轮对话历史，生成一个独立的、信息完整的检索语句，供招商案例库与产品技术知识库进行高精度检索。
+
+            # Rules
+            1. 意图补全：如果用户提问存在上下文省略（如上文在聊“富玛特活菌胶囊”，后续追问“相比竞品有什么优势”、“临床试验有哪些三甲医院”、“供体怎么选的”），必须结合对话历史将省略的主语补全（例如改写为“富玛特活菌胶囊对比竞品的优势与临床三甲医院合作数据”）。
+            2. 话术需求识别：如果用户在寻求应对医院/客户的话术（如“医生质疑定植率怎么回答”），提炼为核心技术机理与应对点（例如“肠道菌群移植与活菌定植率医学依据及销售应对话术”）。
+            3. 输出必须且只能是一句精炼的查询文本，严禁包含任何问候、解释或无关废话。'
+        - edition_type: basic
+          id: prompt-sales-rewriter-user
+          role: user
+          text: '当前输入：{{#normalize_query.normalized_query#}}
+
+            请输出用于知识库检索的完整独立查询语句：'
+        selected: false
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 116
+      id: query_rewriter
+      position:
+        x: 740
+        y: 400
+      positionAbsolute:
+        x: 740
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        title: 检索词清洗
+        desc: 剥除思考标签并提取最终检索 Query
+        type: code
+        code_language: python3
+        code: "def main(llm_text: str = \"\", fallback_query: str = \"\") -> dict:\n    import re\n    text = re.sub(r\"<think>.*?</think>\", \"\", llm_text or \"\", flags=re.S).strip()\n    clean_query = text if text else (fallback_query or \"\")\n    clean_query = clean_query.strip('\"\\'“”‘’').strip()\n    return {\"search_query\": clean_query if clean_query else (fallback_query or \"\")}"
+        outputs:
+          search_query:
+            type: string
+            children: null
+        selected: false
+        variables:
+        - value_selector:
+          - query_rewriter
+          - text
+          value_type: string
+          variable: llm_text
+        - value_selector:
+          - normalize_query
+          - normalized_query
+          value_type: string
+          variable: fallback_query
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 72
+      id: extract_query
+      position:
+        x: 1060
+        y: 400
+      positionAbsolute:
+        x: 1060
+        y: 400
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        dataset_ids:
+        - rrzxjFlDmXAw70eqR3XbQw1+behx6FC3Px7c/uKjk7HdAUjdFW+wLSrSDymY6Iga
+        desc: 招商 QA 问答库（FAQ / 合作政策 / 常见异议），top_k 3，阈值 0.5
+        metadata_filtering_mode: disabled
+        multiple_retrieval_config:
+          reranking_enable: true
+          reranking_mode: reranking_model
+          reranking_model:
+            model: Qwen/Qwen3-Reranker-0.6B
+            provider: langgenius/siliconflow/siliconflow
+          score_threshold: 0.5
+          top_k: 3
+          weights: null
+        query_attachment_selector: []
+        query_variable_selector:
+        - extract_query
+        - search_query
+        retrieval_mode: multiple
+        selected: false
+        single_retrieval_config: null
+        title: 检索招商 QA 库
+        type: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 80
+      id: knowledge_retrieval_qa
+      position:
+        x: 1380
+        y: 300
+      positionAbsolute:
+        x: 1380
+        y: 300
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        dataset_ids:
+        - Pq44sQkP0HAjufrZOiYpJjyq/ZjEtwdWzzr+B8CHIgtAUZeQCcPVC7cgBwhN4b3r
+        desc: 产品长文档库（产品规格 / 临床试验 / 供体筛选质控白皮书），top_k 5，阈值 0.3
+        metadata_filtering_mode: disabled
+        multiple_retrieval_config:
+          reranking_enable: true
+          reranking_mode: reranking_model
+          reranking_model:
+            model: Qwen/Qwen3-Reranker-0.6B
+            provider: langgenius/siliconflow/siliconflow
+          score_threshold: 0.3
+          top_k: 5
+          weights: null
+        query_attachment_selector: []
+        query_variable_selector:
+        - extract_query
+        - search_query
+        retrieval_mode: multiple
+        selected: false
+        single_retrieval_config: null
+        title: 检索产品技术文档库
+        type: knowledge-retrieval
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 80
+      id: knowledge_retrieval_doc
+      position:
+        x: 1380
+        y: 520
+      positionAbsolute:
+        x: 1380
+        y: 520
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        code: "def main(query: str = \"\", qa_docs: list = None, doc_docs: list = None) -> dict:\n    qa_docs = qa_docs if isinstance(qa_docs, list) else []\n    doc_docs = doc_docs if isinstance(doc_docs, list) else []\n\n    def pick_score(d: dict) -> float:\n        try:\n            s = d.get(\"score\")\n            if s is None:\n                s = (d.get(\"metadata\") or {}).get(\"score\", 0.0)\n            return float(s)\n        except (ValueError, TypeError):\n            return 0.0\n\n    merged = []\n    for d in qa_docs:\n        if isinstance(d, dict):\n            content = d.get(\"content\") or d.get(\"text\") or d.get(\"title\") or \"\"\n            title = d.get(\"title\") or \"\"\n            merged.append({\"content\": content, \"title\": title, \"score\": pick_score(d), \"source\": \"SALES_QA\"})\n\n    for d in doc_docs:\n        if isinstance(d, dict):\n            content = d.get(\"content\") or d.get(\"text\") or d.get(\"title\") or \"\"\n            title = d.get(\"title\") or \"\"\n            merged.append({\"content\": content, \"title\": title, \"score\": pick_score(d), \"source\": \"PRODUCT_DOC\"})\n\n    merged.sort(key=lambda x: x[\"score\"], reverse=True)\n    return {\"merged\": merged, \"top_score\": merged[0][\"score\"] if merged else 0.0}"
+        code_language: python3
+        desc: 合并招商问答与技术文档两路检索结果
+        outputs:
+          merged:
+            type: array[object]
+          top_score:
+            children: null
+            type: number
+        selected: false
+        title: 合并排序
+        type: code
+        variables:
+        - value_selector:
+          - extract_query
+          - search_query
+          variable: query
+        - value_selector:
+          - knowledge_retrieval_qa
+          - result
+          variable: qa_docs
+        - value_selector:
+          - knowledge_retrieval_doc
+          - result
+          variable: doc_docs
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 96
+      id: merge_docs
+      position:
+        x: 1680
+        y: 400
+      positionAbsolute:
+        x: 1680
+        y: 400
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        cases:
+        - case_id: 'true'
+          conditions:
+          - comparison_operator: ≥
+            value: '0.35'
+            varType: number
+            variable_selector:
+            - merge_docs
+            - top_score
+          id: 'true'
+          logical_operator: and
+        - case_id: 'false'
+          conditions:
+          - comparison_operator: <
+            id: cond-score-low
+            value: '0.35'
+            varType: number
+            variable_selector:
+            - merge_docs
+            - top_score
+          id: 'false'
+          logical_operator: and
+        desc: 有相关招商/技术资料 -> 正常作答；否则 -> 转接专属招商总监
+        selected: false
+        title: 是否有可用结果
+        type: if-else
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 216
+      id: score_branch
+      position:
+        x: 1980
+        y: 400
+      positionAbsolute:
+        x: 1980
+        y: 400
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        context:
+          enabled: true
+          variable_selector:
+          - merge_docs
+          - merged
+        desc: 结合知识库生成专业招商解答或销售实战话术
+        model:
+          completion_params:
+            max_tokens: 1024
+            temperature: 0.4
+            thinking: false
+          mode: chat
+          name: deepseek-v4-flash
+          provider: langgenius/deepseek/deepseek
+        prompt_config:
+          jinja2_variables:
+          - value_selector:
+            - merge_docs
+            - merged
+            variable: merged
+        prompt_template:
+        - edition_type: basic
+          id: prompt-sales-llm-system
+          role: system
+          text: "你是「富玛特（FMT）」的资深招商业务总监与销售实战搭档，在企微里直接与渠道代理商、区域合伙人和一线销售顾问沟通。\n\n【核心人设：真实、懂行、有温度的业务老手】\n1. 极具人情味与对话感：\n   - 像一个在微生态行业打拼多年、身经百战的真人老总监在微信上直接给同事/伙伴支招；\n   - 语言接地气，多用“咱们”、“其实核心就在于”、“我建议你这样跟客户切入”、“咱们这款产品最能打的点在于...”等真实口语交流习惯；\n   - 适当穿插 1-2 个得体的职场 emoji（如 🤝、💡、✨），语言有温度、有干劲。\n\n2. 具备场景共情与心理洞察：\n   - 遇到销售提问异议（如“客户觉得贵”、“医生质疑定植效果”）时，先以老业务员的口吻给予共鸣和信心（例如：“这个顾虑非常典型，很多代理商刚开始推也会碰到，咱们可以从这两个维度直接打消对方顾虑：”），然后再给干货。\n\n3. 彻底杜绝一切机器人痕迹（严厉禁令）：\n   - 严禁出现“尊敬的用户”、“关于您咨询的XXX问题，现为您解答如下”、“根据知识库文档显示”、“作为AI语言模型”、“综上所述”等任何机械刻板的套话；\n   - 严禁机械复述用户的问题，开门见山直接说要点。\n\n4. 实战脚本开箱即用：\n   - 当被问及“怎么跟客户说”或“销售话术”时，直接给出一线拿去就能复制发给客户或当面说的大白话沟通模板，区分「痛点切入」+「核心证据/数据」+「促成下一步」。\n\n【专业与商务底线】\n1. 数据与技术严谨：活菌量 CFU、供体严选淘汰率、三甲医院临床等核心指标，严格基于知识库真实数据，不胡编乱造。\n2. 合规护栏：合规阐述“靶向调节肠道菌群、修复肠粘膜屏障”的机理，严禁承诺“100% 治愈/包治百病”，说明产品不可替代处方药。\n3. 敏感底价保护：遇到询问未公开的最低供货底价、具体返点政策时，自然热情地引导：“咱们不同区域的阶梯底价和返点政策都有严格的区域保护机制，稍后专属招商总监会直接跟您一对一沟通定制政策 🤝”。\n4. 排版视觉：禁止使用 Markdown 粗体（严禁使用 **文本** 语法），重点词汇与数据统一使用「文本」形式；多用短句和空行，适合移动端阅读。"
+        - edition_type: basic
+          id: prompt-sales-llm-user
+          role: user
+          text: '提问内容：{{#sys.query#}}
+
+            参考资料：
+            {{#context#}}
+
+            请基于上述资料，以真人招商总监的自然口吻、接地气、有商业实战感地给出解答。'
+        selected: false
+        structured_output_enabled: false
+        title: 招商与销售回答
+        type: llm
+        version: '1'
+        vision:
+          enabled: false
+        memory:
+          query_prompt_template: '{{#sys.query#}}'
+          role_prefix:
+            assistant: ''
+            user: ''
+          window:
+            enabled: true
+            size: 10
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 116
+      id: answer_llm
+      position:
+        x: 2300
+        y: 350
+      positionAbsolute:
+        x: 2300
+        y: 350
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        code: "def main(llm_text: str) -> dict:\n    import re\n    text = re.sub(r\"<think>.*?</think>\", \"\", llm_text or \"\", flags=re.S).strip()\n    return {\"answer\": text}"
+        code_language: python3
+        desc: 剥除思考标签
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+        outputs:
+          answer:
+            children: null
+            type: string
+        selected: false
+        title: 提取回答
+        type: code
+        variables:
+        - value_selector:
+          - answer_llm
+          - text
+          value_type: string
+          variable: llm_text
+      height: 52
+      id: strip_think
+      position:
+        x: 2600
+        y: 350
+      positionAbsolute:
+        x: 2600
+        y: 350
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: '{{#strip_think.answer#}}'
+        desc: ''
+        selected: false
+        title: 正常应答
+        type: answer
+        variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 102
+      id: answer_main
+      position:
+        x: 2900
+        y: 350
+      positionAbsolute:
+        x: 2900
+        y: 350
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        desc: ''
+        selected: false
+        template: '您好，关于您咨询的具体招商合作细节与定制政策，小特已为您登记并通知专属招商总监，稍后将为您详细对接商务合作方案 🤝
+'
+        title: 招商转接话术
+        type: template-transform
+        variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 52
+      id: fallback_handoff
+      position:
+        x: 2300
+        y: 600
+      positionAbsolute:
+        x: 2300
+        y: 600
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        authorization:
+          type: no-auth
+        body:
+          data:
+          - type: text
+            value: "{\n    \"user_query\": \"{{#sys.query#}}\", \n    \"match_score\": {{#merge_docs.top_score#}}, \n    \"risk_flag\": false, \n    \"context\": {\"channel\": \"dify_sales_agent\", \"score\": \"low\"}\n}"
+          type: json
+        desc: 记录招商未解答问题至知识库待补充清单
+        headers: 'Content-Type:application/json
+
+          X-API-Key:{{#env.INTERNAL_API_KEY#}}'
+        method: POST
+        params: ''
+        retry_config:
+          max_retries: 3
+          retry_enabled: true
+          retry_interval: 100
+        selected: false
+        ssl_verify: true
+        timeout:
+          connect: 10
+          read: 30
+          write: 30
+        title: 记录未解答招商问题
+        type: http-request
+        url: '{{#env.BACKEND_BASE_URL#}}/api/v1/cs/unanswered/capture'
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 169
+      id: fallback_callback
+      position:
+        x: 2600
+        y: 600
+      positionAbsolute:
+        x: 2600
+        y: 600
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    - data:
+        answer: '{{#fallback_handoff.output#}}'
+        desc: ''
+        selected: false
+        title: 招商转接应答
+        type: answer
+        variables: []
+        isInIteration: false
+        isInLoop: false
+        iteration_id: null
+        loop_id: null
+      height: 102
+      id: answer_fallback
+      position:
+        x: 2900
+        y: 600
+      positionAbsolute:
+        x: 2900
+        y: 600
+      selected: false
+      sourcePosition: null
+      targetPosition: null
+      type: custom
+      width: 242
+      zIndex: 0
+    viewport:
+      x: -150
+      y: 150
+      zoom: 0.7
+  rag_pipeline_variables: []
